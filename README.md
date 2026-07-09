@@ -1,5 +1,7 @@
 # Monarch Money MCP Server
 
+Archived in favor of the now officially supported [Monarch Money Connector](https://help.monarch.com/hc/en-us/articles/50207234679956-Monarch-MCP-Connector)
+
 An MCP (Model Context Protocol) server that provides access to Monarch Money financial data and operations.
 
 ## Features
