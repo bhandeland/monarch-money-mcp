@@ -1178,6 +1178,194 @@ async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
             "success": (resp.get("deleteMerchant") or {}).get("success")}
 
 
+# --- Insights and recap -----------------------------------------------------
+
+def insight_enums(description: str, values: list[str]) -> Args:
+    return {"type": "array", "items": {"type": "string", "enum": values},
+            "description": description}
+
+
+INSIGHT_PAGE: Args = {
+    "limit": {"type": "integer", "description": "Maximum results to return", "default": 50},
+    "offset": {"type": "integer", "description": "Results to skip, for paging"},
+}
+INSIGHT_ID: Args = {"insight_id": string("Insight ID (see get_insights)")}
+
+
+async def insight_mutation(mm: MonarchMoney, request: GraphQLRequest, field: str,
+                           mutation_input: Args, action: str, result_key: str) -> Any:
+    resp = await q.execute(mm, request, {"input": mutation_input})
+    payload: Args = resp.get(field) or {}
+    q.raise_payload_errors(payload.get("errors"), action)
+    return payload.get(result_key)
+
+
+@tool("get_insights",
+      "List Monarch's personalized insights (tips about spending, bills, and savings shown "
+      "in the app's feed). With no filters, returns current insights",
+      {"status": insight_enums("Only insights with these statuses", q.INSIGHT_LIFECYCLE_STATUSES),
+       "bookmarked": boolean("Only bookmarked (true) or unbookmarked (false) insights"),
+       "dismissed": boolean("Only dismissed (true) or non-dismissed (false) insights"),
+       "unhelpful": boolean("Only insights marked unhelpful (true) or not (false)"),
+       **INSIGHT_PAGE})
+async def get_insights(mm: MonarchMoney, args: Args) -> Any:
+    variables = pick(args, {"status": "statuses", "bookmarked": "bookmarked",
+                            "dismissed": "dismissed", "unhelpful": "unhelpful",
+                            "offset": "offset"})
+    variables["limit"] = args.get("limit", 50)
+    return (await q.execute(mm, q.GET_INSIGHTS, variables)).get("insights")
+
+
+@tool("get_insight", "Get one insight", INSIGHT_ID, ["insight_id"])
+async def get_insight(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_INSIGHT, {"id": args["insight_id"]})).get("insight")
+
+
+@tool("get_insight_counts",
+      "Count completed, bookmarked, dismissed, and unhelpful insights, and the total value "
+      "insights have surfaced")
+async def get_insight_counts(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_INSIGHT_COUNTS)
+
+
+@tool("update_insight_status",
+      "Change an insight's status, e.g. in_progress, completed, or denied (not interested; "
+      "undo with undo_insight_denial)",
+      {**INSIGHT_ID,
+       "status": string("New status", enum=q.INSIGHT_LIFECYCLE_STATUSES),
+       "denial_reason": string("Why the insight isn't useful (with status denied)"),
+       "allow_resurface": boolean("Let a denied insight come back later"),
+       "mute_subject": boolean("Stop showing insights about the same subject")},
+      ["insight_id", "status"], WRITE)
+async def update_insight_status(mm: MonarchMoney, args: Args) -> Any:
+    mutation_input = {"id": args["insight_id"], "status": args["status"],
+                      **pick(args, {"denial_reason": "denialReason",
+                                    "allow_resurface": "allowResurface",
+                                    "mute_subject": "muteSubject"})}
+    return await insight_mutation(mm, q.UPDATE_INSIGHT_STATUS, "updateInsightStatus",
+                                  mutation_input, "Insight status update", "insight")
+
+
+@tool("set_insight_bookmarked", "Bookmark or unbookmark an insight",
+      {**INSIGHT_ID, "bookmarked": boolean("true to bookmark, false to remove the bookmark")},
+      ["insight_id", "bookmarked"], WRITE)
+async def set_insight_bookmarked(mm: MonarchMoney, args: Args) -> Any:
+    return await insight_mutation(mm, q.SET_INSIGHT_BOOKMARKED, "setInsightBookmarked",
+                                  {"id": args["insight_id"], "bookmarked": args["bookmarked"]},
+                                  "Insight bookmark", "insight")
+
+
+@tool("set_insight_feedback",
+      "Rate an insight helpful (like) or unhelpful (dislike). Omit feedback to clear the rating",
+      {**INSIGHT_ID,
+       "feedback": string("Rating", enum=["like", "dislike"]),
+       "reason": string("Optional explanation")},
+      ["insight_id"], WRITE)
+async def set_insight_feedback(mm: MonarchMoney, args: Args) -> Any:
+    mutation_input = {"id": args["insight_id"], "feedback": args.get("feedback"),
+                      **pick(args, {"reason": "reason"})}
+    return await insight_mutation(mm, q.SET_INSIGHT_FEEDBACK, "setInsightFeedback",
+                                  mutation_input, "Insight feedback", "insight")
+
+
+@tool("dismiss_insight", "Dismiss an insight so it leaves the feed", INSIGHT_ID,
+      ["insight_id"], DESTRUCTIVE)
+async def dismiss_insight(mm: MonarchMoney, args: Args) -> Any:
+    return await insight_mutation(mm, q.SOFT_DELETE_INSIGHT, "softDeleteInsight",
+                                  {"id": args["insight_id"]}, "Insight dismissal", "deleted")
+
+
+@tool("undo_insight_denial", "Restore an insight that was marked denied (not interested)",
+      INSIGHT_ID, ["insight_id"], WRITE)
+async def undo_insight_denial(mm: MonarchMoney, args: Args) -> Any:
+    return await insight_mutation(mm, q.UNDO_INSIGHT_DENIAL, "undoInsightDenial",
+                                  {"id": args["insight_id"]}, "Insight denial undo", "insight")
+
+
+@tool("get_financial_insights",
+      "List savings opportunities Monarch found, such as cheaper plans, duplicate "
+      "subscriptions, or expired promotions, with estimated savings",
+      {"status": insight_enums("Only opportunities with these statuses",
+                           q.FINANCIAL_INSIGHT_STATUSES),
+       "opportunity_type": insight_enums("Only these kinds of opportunity", q.OPPORTUNITY_TYPES),
+       **INSIGHT_PAGE})
+async def get_financial_insights(mm: MonarchMoney, args: Args) -> Any:
+    variables = pick(args, {"status": "statuses", "opportunity_type": "opportunityTypes",
+                            "offset": "offset"})
+    variables["limit"] = args.get("limit", 50)
+    return (await q.execute(mm, q.GET_FINANCIAL_INSIGHTS, variables)).get("financialInsights")
+
+
+@tool("get_financial_insight",
+      "Get one savings opportunity with its suggested actions and step-by-step instructions",
+      {"financial_insight_id": string("Savings opportunity ID (see get_financial_insights)")},
+      ["financial_insight_id"])
+async def get_financial_insight(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_FINANCIAL_INSIGHT, {"id": args["financial_insight_id"]})
+    return resp.get("financialInsight")
+
+
+@tool("get_financial_insight_summary",
+      "Summarize savings opportunities (identified and captured savings, counts by status) "
+      "and the latest scan for new ones. Without dates, covers all time",
+      DATE_RANGE)
+async def get_financial_insight_summary(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    return await q.execute(mm, q.GET_FINANCIAL_INSIGHT_SUMMARY,
+                           {"startDate": start, "endDate": end})
+
+
+@tool("update_financial_insight_status",
+      "Change a savings opportunity's status, e.g. in_progress, completed, or denied",
+      {"financial_insight_id": string("Savings opportunity ID"),
+       "status": string("New status", enum=q.FINANCIAL_INSIGHT_STATUSES),
+       "execution_method": string("How you're acting on it: self_guided, or copilot "
+                                  "(Monarch's assistant helps)",
+                                  enum=["self_guided", "copilot"]),
+       "denial_reason": string("Why it isn't useful (with status denied)"),
+       "allow_resurface": boolean("Let a denied opportunity come back later")},
+      ["financial_insight_id", "status"], WRITE)
+async def update_financial_insight_status(mm: MonarchMoney, args: Args) -> Any:
+    mutation_input = {"id": args["financial_insight_id"], "status": args["status"],
+                      **pick(args, {"execution_method": "executionMethod",
+                                    "denial_reason": "denialReason",
+                                    "allow_resurface": "allowResurface"})}
+    return await insight_mutation(mm, q.UPDATE_FINANCIAL_INSIGHT_STATUS,
+                                  "updateFinancialInsightStatus", mutation_input,
+                                  "Savings opportunity status update", "financialInsight")
+
+
+# Monarch writes the weekly recap on first request; the web app polls like this.
+RECAP_POLL_INTERVAL = 2.0
+RECAP_POLL_ATTEMPTS = 15
+
+
+def last_recap_week(today: date) -> tuple[str, str]:
+    """The most recent finished Sunday-Saturday week, as the web app picks it."""
+    end = today - timedelta(days=(today.weekday() + 2) % 7 or 7)
+    return (end - timedelta(days=6)).isoformat(), end.isoformat()
+
+
+@tool("get_weekly_recap",
+      "Get Monarch's weekly recap: a written summary with cards on net worth, spending, and "
+      "recurring bills. Without dates, covers the last full Sunday-Saturday week. Monarch "
+      "may take a few seconds to write a new recap",
+      {"start_date": string("Week start (a Sunday) in YYYY-MM-DD format (requires end_date)"),
+       "end_date": string("Week end (a Saturday) in YYYY-MM-DD format (requires start_date)")})
+async def get_weekly_recap(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    if not (start and end):
+        start, end = last_recap_week(date.today())
+    for attempt in range(RECAP_POLL_ATTEMPTS):
+        if attempt:
+            await asyncio.sleep(RECAP_POLL_INTERVAL)
+        recap = (await q.execute(mm, q.GET_WEEKLY_RECAP,
+                                 {"startDate": start, "endDate": end})).get("recap")
+        if recap:
+            return recap
+    raise RuntimeError(f"The recap for {start} to {end} isn't ready yet. Try again shortly.")
+
+
 # --- Other ------------------------------------------------------------------
 
 @tool("get_household_members", "List household members (IDs for owner_user_id)")

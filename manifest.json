@@ -356,6 +356,58 @@
       "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
     },
     {
+      "name": "get_insights",
+      "description": "List Monarch's personalized insights (tips about spending, bills, and savings shown in the app's feed)."
+    },
+    {
+      "name": "get_insight",
+      "description": "Get one insight."
+    },
+    {
+      "name": "get_insight_counts",
+      "description": "Count completed, bookmarked, dismissed, and unhelpful insights, and the total value insights have surfaced."
+    },
+    {
+      "name": "update_insight_status",
+      "description": "Change an insight's status, e.g."
+    },
+    {
+      "name": "set_insight_bookmarked",
+      "description": "Bookmark or unbookmark an insight."
+    },
+    {
+      "name": "set_insight_feedback",
+      "description": "Rate an insight helpful (like) or unhelpful (dislike)."
+    },
+    {
+      "name": "dismiss_insight",
+      "description": "Dismiss an insight so it leaves the feed."
+    },
+    {
+      "name": "undo_insight_denial",
+      "description": "Restore an insight that was marked denied (not interested)."
+    },
+    {
+      "name": "get_financial_insights",
+      "description": "List savings opportunities Monarch found, such as cheaper plans, duplicate subscriptions, or expired promotions, with estimated savings."
+    },
+    {
+      "name": "get_financial_insight",
+      "description": "Get one savings opportunity with its suggested actions and step-by-step instructions."
+    },
+    {
+      "name": "get_financial_insight_summary",
+      "description": "Summarize savings opportunities (identified and captured savings, counts by status) and the latest scan for new ones."
+    },
+    {
+      "name": "update_financial_insight_status",
+      "description": "Change a savings opportunity's status, e.g."
+    },
+    {
+      "name": "get_weekly_recap",
+      "description": "Get Monarch's weekly recap: a written summary with cards on net worth, spending, and recurring bills."
+    },
+    {
       "name": "get_household_members",
       "description": "List household members (IDs for owner_user_id)."
     },
