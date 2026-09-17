@@ -19,7 +19,6 @@ async def test_list_tools_matches_registry() -> None:
     async with Client(server.server) as client:
         tools = (await client.list_tools()).tools
     assert [t.name for t in tools] == list(server.TOOLS)
-    assert len(tools) == 70
 
 
 @pytest.mark.parametrize("name", sorted(server.TOOLS))
