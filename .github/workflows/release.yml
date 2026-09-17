@@ -1,0 +1,33 @@
+name: release
+
+# Pushing a tag like v0.2.0 builds the Claude Desktop extension and attaches it
+# to a GitHub release. The tag must match the version in pyproject.toml.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  mcpb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - run: uv sync --locked
+      - name: Tag matches the project version
+        run: |
+          version=$(uv run --quiet python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != pyproject version $version"; exit 1; }
+      - run: uv run python scripts/fetch_schema.py
+      - run: ./check.sh
+      - run: npx -y @anthropic-ai/mcpb pack . "monarch-money-mcp-${GITHUB_REF_NAME}.mcpb"
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: monarch-money-mcp-*.mcpb
+          generate_release_notes: true

@@ -29,3 +29,6 @@ Thumbs.db
 
 # Monarch schema fetched by scripts/fetch_schema.py
 .schema/
+
+# Claude Desktop extension bundles (built by `npx @anthropic-ai/mcpb pack`)
+*.mcpb

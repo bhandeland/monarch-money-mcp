@@ -78,6 +78,25 @@ def test_session_file_default_and_override(tmp_path: Path) -> None:
     assert auth.session_file({"MONARCH_SESSION_FILE": str(tmp_path / "s.json")}) == tmp_path / "s.json"
 
 
+def test_configured_env_drops_unset_values() -> None:
+    env = {
+        "MONARCH_EMAIL": "me@example.com",
+        "MONARCH_PASSWORD": "",
+        "MONARCH_MFA_SECRET": "${user_config.monarch_mfa_secret}",
+        "MONARCH_SESSION_FILE": "${user_config.session_file}",
+        "HOME": "/home/me",
+    }
+    assert auth.configured_env(env) == {"MONARCH_EMAIL": "me@example.com"}
+
+
+def test_unset_desktop_settings_fall_back_to_saved_session() -> None:
+    env = auth.configured_env({"MONARCH_EMAIL": "${user_config.monarch_email}",
+                               "MONARCH_SESSION_FILE": ""})
+    authenticator = auth.Authenticator(env)
+    assert authenticator.session_file == auth.DEFAULT_SESSION_FILE
+    assert not authenticator.can_renew
+
+
 def test_save_token_is_private(session: Path) -> None:
     auth.save_token(session, "abc")
     assert json.loads(session.read_text()) == {"token": "abc"}

@@ -15,6 +15,19 @@ Forked from [colvint/monarch-money-mcp](https://github.com/colvint/monarch-money
 - **Rules**: list, create, and delete transaction rules
 - **Credit score** history
 
+## Claude Desktop extension
+
+The quickest way to use this with Claude Desktop on macOS, Windows, or Linux:
+
+1. Download `monarch-money-mcp-<version>.mcpb` from the [latest release](https://github.com/bhandeland/monarch-money-mcp/releases/latest).
+2. Double-click it (or drag it onto Claude Desktop's Settings > Extensions page) and choose Install. Claude Desktop sets up Python and the dependencies itself.
+3. The extension's settings are all optional:
+   - **Leave them blank** to use a saved login token. Run `login` once in a terminal first (see [Log in once](#1-log-in-once); with [uv](https://docs.astral.sh/uv/) installed you can skip cloning and run `uvx --from git+https://github.com/bhandeland/monarch-money-mcp monarch-money-mcp login`).
+   - **Fill in your email and password** (plus your MFA secret if you use 2FA) to have the extension log in by itself and log in again when the token expires. Claude Desktop keeps these in your system keychain.
+   - **Session file** only matters if you saved the token somewhere other than the default.
+
+To build the extension yourself: `npx @anthropic-ai/mcpb pack`.
+
 ## Installation
 
 You need [uv](https://docs.astral.sh/uv/getting-started/installation/). It runs the server and installs its dependencies, including Python if you don't have it.
@@ -174,6 +187,8 @@ uv sync
 The tests mock the Monarch client, so they never touch a real account. Every tool gets called through the MCP dispatcher, and a full test run fails if any registered tool has no test.
 
 Monarch's web app ships a copy of its GraphQL schema. `scripts/fetch_schema.py` extracts it to `.schema/`, and the tests validate every operation the server sends against it, which catches wrong field names and argument types without calling the API. `check.sh` fetches the schema if it's missing. CI runs `./check.sh` on every push and pull request.
+
+`manifest.json` describes the Claude Desktop extension. After adding or changing a tool, or bumping the version, run `uv run python scripts/update_manifest.py`; a test fails until the manifest matches. Pushing a `v*` tag that matches the version in `pyproject.toml` builds the `.mcpb` and attaches it to a GitHub release.
 
 ## Credits
 

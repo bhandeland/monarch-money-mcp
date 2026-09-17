@@ -12,6 +12,7 @@ Only (3) can renew a token that stops working while the server is running.
 import asyncio
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -37,6 +38,17 @@ SESSION_EXPIRED = (
 
 class AuthError(Exception):
     pass
+
+
+# Claude Desktop passes an optional extension setting the user left blank either
+# as "" or as the unreplaced "${user_config.<key>}" placeholder.
+_UNSET_PLACEHOLDER = re.compile(r"\$\{user_config\.[^}]*\}")
+
+
+def configured_env(env: Mapping[str, str]) -> dict[str, str]:
+    """The MONARCH_* variables that actually have a value."""
+    return {k: v for k, v in env.items()
+            if k.startswith("MONARCH_") and v and not _UNSET_PLACEHOLDER.fullmatch(v)}
 
 
 def session_file(env: Mapping[str, str]) -> Path:
