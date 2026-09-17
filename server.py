@@ -266,7 +266,7 @@ async def update_account(mm: MonarchMoney, args: Args) -> Any:
     }))
 
 
-@tool("delete_account", "Permanently delete an account and its transactions",
+@tool("delete_account", "Delete an account and its transactions (undelete_account can restore it)",
       {"account_id": string("Account ID")}, ["account_id"], DESTRUCTIVE)
 async def delete_account(mm: MonarchMoney, args: Args) -> Any:
     return await mm.delete_account(args["account_id"])
@@ -1178,482 +1178,6 @@ async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
             "success": (resp.get("deleteMerchant") or {}).get("success")}
 
 
-# --- Assets and restore -----------------------------------------------------
-
-SEARCH_LIMIT: Args = {"type": "integer", "minimum": 1,
-                      "description": "Maximum number of matches (default 5)"}
-
-
-@tool("search_property_values",
-      "Look up Zillow property matches and their Zestimates by address. Gives the zpid "
-      "for create_real_estate_account.",
-      {"address": string("Street address, e.g. '1 Main St, Springfield, IL'"),
-       "limit": SEARCH_LIMIT},
-      ["address"])
-async def search_property_values(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.GET_ZESTIMATES,
-                           {"address": args["address"], "limit": args.get("limit", 5)})
-    return resp.get("zestimates")
-
-
-@tool("search_vehicle_values",
-      "Look up a vehicle and its estimated value by VIN. Gives the vin and name for "
-      "create_vehicle_account.",
-      {"vin": string("Vehicle identification number (17 characters)"),
-       "limit": SEARCH_LIMIT},
-      ["vin"])
-async def search_vehicle_values(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.SEARCH_VEHICLES,
-                           {"search": args["vin"], "limit": args.get("limit", 5)})
-    return resp.get("vehicles")
-
-
-@tool("get_deleted_accounts", "List deleted accounts that undelete_account can restore")
-async def get_deleted_accounts(mm: MonarchMoney, args: Args) -> Any:
-    accounts = (await q.execute(mm, q.GET_ACCOUNTS_INCLUDING_DELETED)).get("accounts") or []
-    return [a for a in accounts if a.get("deletedAt")]
-
-
-@tool("create_real_estate_account",
-      "Add a property whose value Monarch keeps updated from Zillow. Find the zpid with "
-      "search_property_values.",
-      {"zpid": string("Zillow property ID from search_property_values"),
-       "name": string("Account name"),
-       "subtype": string("Real estate subtype: primary_home, secondary_home or rental_property"),
-       "current_balance": number("Starting value (default 0; Zillow updates it)"),
-       "include_in_net_worth": boolean("Count this property toward net worth", True)},
-      ["zpid", "name", "subtype"], WRITE)
-async def create_real_estate_account(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.CREATE_REAL_ESTATE_ACCOUNT, {"input": {
-        "zpid": args["zpid"],
-        "name": args["name"],
-        "subtype": args["subtype"],
-        "currentBalance": args.get("current_balance", 0),
-        "includeInNetWorth": args.get("include_in_net_worth", True),
-    }})
-    payload = resp.get("createSyncedRealEstateAccount") or {}
-    q.raise_payload_errors(payload.get("errors"), "Creating the real estate account")
-    return payload.get("account")
-
-
-@tool("create_vehicle_account",
-      "Add a vehicle whose value Monarch keeps updated by VIN. Check the VIN with "
-      "search_vehicle_values.",
-      {"vin": string("Vehicle identification number"),
-       "name": string("Account name"),
-       "subtype": string("Vehicle subtype: car, boat, motorcycle, snowmobile, bicycle or other")},
-      ["vin", "name", "subtype"], WRITE)
-async def create_vehicle_account(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.CREATE_VEHICLE_ACCOUNT, {"input": {
-        "vin": args["vin"], "name": args["name"], "subtype": args["subtype"],
-    }})
-    payload = resp.get("createSyncedVehicleAccount") or {}
-    q.raise_payload_errors(payload.get("errors"), "Creating the vehicle account")
-    return payload.get("account")
-
-
-@tool("undelete_account", "Restore a deleted account (see get_deleted_accounts)",
-      {"account_id": string("ID of the deleted account")}, ["account_id"], WRITE)
-async def undelete_account(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.UNDELETE_ACCOUNT, {"input": {"id": args["account_id"]}})
-    payload = resp.get("undeleteAccount") or {}
-    q.raise_payload_errors(payload.get("errors"), "Restoring the account")
-    return {"account_id": args["account_id"], "undeleted": payload.get("undeleted")}
-# --- Reports ----------------------------------------------------------------
-
-REPORT_FILTERS: Args = {
-    **DATE_RANGE,
-    "relative_period": {
-        "type": "object",
-        "description": "Instead of dates: the last N days/weeks/months/quarters/years",
-        "properties": {
-            "unit": {"type": "string", "enum": ["day", "week", "month", "quarter", "year"]},
-            "value": {"type": "integer", "minimum": 1},
-            "include_current": {"type": "boolean", "default": True,
-                                "description": "Count the current period as one of the N"},
-        },
-        "required": ["unit", "value"],
-        "additionalProperties": False,
-    },
-    "category_type": string("Only expense, income, or transfer transactions",
-                            enum=["expense", "income", "transfer"]),
-    "account_ids": id_list("Only these accounts"),
-    "category_ids": id_list("Only these categories"),
-    "exclude_category_ids": id_list("Leave out these categories"),
-    "category_group_ids": id_list("Only these category groups"),
-    "merchant_ids": id_list("Only these merchants"),
-    "tag_ids": id_list("Only transactions with any of these tags"),
-    "is_untagged": boolean("Only transactions without tags"),
-    "is_uncategorized": boolean("Only uncategorized transactions"),
-    "search": string("Free-text search (merchant, notes, etc.)"),
-    "min_amount": number("Minimum absolute amount"),
-    "max_amount": number("Maximum absolute amount"),
-    "budget_variability": string("Only categories with this budget type",
-                                 enum=["fixed", "flexible", "non_monthly"]),
-    "owner_user_ids": id_list("Only transactions owned by these household members"),
-    "include_jointly_owned": boolean("With owner_user_ids, also include joint transactions "
-                                     "(default true)"),
-    "business_entity_ids": id_list("Only transactions for these businesses"),
-    "include_unassigned_business": boolean("With business_entity_ids, also include transactions "
-                                           "without a business (default false)"),
-    "hidden_from_reports": boolean("Only hidden (true) or visible (false) transactions"),
-    "is_recurring": boolean("Only recurring (true) or non-recurring (false) transactions"),
-    "is_pending": boolean("Only pending (true) or posted (false) transactions"),
-    "is_split": boolean("Only split (true) or unsplit (false) transactions"),
-    "is_investment_account": boolean("Only transactions in investment accounts (true) or not"),
-    "has_notes": boolean("Only transactions with (true) or without (false) notes"),
-    "has_attachments": boolean("Only transactions with (true) or without (false) attachments"),
-    "needs_review": boolean("Only transactions that need review (true) or not"),
-    "credits_only": boolean("Only credits (money in)"),
-    "debits_only": boolean("Only debits (money out)"),
-}
-
-REPORT_FILTER_FIELDS = {
-    "category_type": "categoryType",
-    "account_ids": "accounts",
-    "category_ids": "categories",
-    "exclude_category_ids": "excludeCategories",
-    "category_group_ids": "categoryGroups",
-    "merchant_ids": "merchants",
-    "tag_ids": "tags",
-    "is_untagged": "isUntagged",
-    "is_uncategorized": "isUncategorized",
-    "search": "search",
-    "min_amount": "absAmountGte",
-    "max_amount": "absAmountLte",
-    "budget_variability": "budgetVariability",
-    "hidden_from_reports": "hideFromReports",
-    "is_recurring": "isRecurring",
-    "is_pending": "isPending",
-    "is_split": "isSplit",
-    "is_investment_account": "isInvestmentAccount",
-    "has_notes": "hasNotes",
-    "has_attachments": "hasAttachments",
-    "needs_review": "needsReview",
-    "credits_only": "creditsOnly",
-    "debits_only": "debitsOnly",
-}
-
-REPORT_GROUPS = ["category", "category_group", "merchant", "business_entity",
-                 "budget_variability", "owner"]
-REPORT_TYPES = ["cashFlow", "income", "spending"]
-CHART_TYPES = {
-    # The web app derives chartCalculation from the chart type.
-    "pieChart": "totalAmounts",
-    "horizontalBarChart": "totalAmounts",
-    "treemapChart": "totalAmounts",
-    "sankeyCashFlowChart": "totalAmounts",
-    "profitLossTable": "totalAmounts",
-    "barChart": "changeOverTime",
-    "stackedBarChart": "changeOverTime",
-    "cashFlowChart": "changeOverTime",
-    "stackedCashFlowChart": "changeOverTime",
-}
-REPORT_VIEW: Args = {
-    "report_type": string("Which report page it opens as", enum=REPORT_TYPES),
-    "chart_type": string("How the web app charts it", enum=list(CHART_TYPES)),
-    "timeframe": string("Time bucket for charts over time",
-                        enum=["day", "week", "month", "quarter", "year"]),
-}
-
-
-def report_filters(args: Args) -> Args:
-    """TransactionFilterInput from the REPORT_FILTERS arguments."""
-    start, end = date_range(args)
-    period = args.get("relative_period")
-    if period and start:
-        raise ValueError("Give either start_date/end_date or relative_period, not both.")
-    filters: Args = {}
-    if start:
-        filters.update(startDate=start, endDate=end)
-    filters.update(pick(args, REPORT_FILTER_FIELDS))
-    if period:
-        filters["timeframePeriod"] = {"unit": period["unit"], "value": period["value"],
-                                      "includeCurrent": period.get("include_current", True)}
-    if args.get("owner_user_ids"):
-        filters["ownershipSet"] = {"userIds": args["owner_user_ids"],
-                                   "includeJointlyOwned": args.get("include_jointly_owned", True)}
-    if args.get("business_entity_ids"):
-        filters["businessEntitySet"] = {
-            "businessEntityIds": args["business_entity_ids"],
-            "includeUnassigned": args.get("include_unassigned_business", False)}
-    return filters
-
-
-def report_view(args: Args) -> Args | None:
-    view = pick(args, {"report_type": "analysisScope", "chart_type": "chartType",
-                       "timeframe": "timeframe"})
-    if "chart_type" in args:
-        view["chartCalculation"] = CHART_TYPES[args["chart_type"]]
-    return view or None
-
-
-@tool("get_report",
-      "Totals for transactions matching the filters, optionally grouped by category, merchant, "
-      "etc. and/or by time period, like the web app's Reports page. Returns each group's "
-      "summary (sum, avg, count, max, income, expense, savings) and the overall total. "
-      "Expenses are negative.",
-      {**REPORT_FILTERS,
-       "group_by": {"type": "array", "maxItems": 2, "description": "Group by these, e.g. "
-                    "[\"category\"] (combine with timeframe for a breakdown per period)",
-                    "items": {"type": "string", "enum": REPORT_GROUPS}},
-       "timeframe": string("Also group by this period",
-                           enum=["day", "week", "month", "quarter", "year"]),
-       "sort_by": string("Order groups by this summary value",
-                         enum=["sum", "sum_expense", "sum_income", "sum_transfer", "avg",
-                               "avg_expense", "avg_income", "count", "max", "max_expense",
-                               "max_income", "min", "first", "last"]),
-       "fill_empty_values": boolean("Include empty periods with zero values", False)})
-async def get_report(mm: MonarchMoney, args: Args) -> Any:
-    groups: list[str] = args.get("group_by") or []
-    variables: Args = {
-        "filters": report_filters(args),
-        "fillEmptyValues": args.get("fill_empty_values", False),
-        **{f"include{''.join(w.title() for w in g.split('_'))}": g in groups
-           for g in REPORT_GROUPS},
-        **pick(args, {"timeframe": "groupByTimeframe", "sort_by": "sortBy"}),
-    }
-    if groups:
-        variables["groupBy"] = groups
-    resp = await q.execute(mm, q.GET_REPORTS_DATA, variables)
-    aggregates = resp.get("aggregates") or []
-    return {
-        "groups": [{"group": {k: v for k, v in (row.get("groupBy") or {}).items() if v is not None},
-                    "summary": row.get("summary")} for row in resp.get("reports") or []],
-        "total": aggregates[0].get("summary") if aggregates else None,
-    }
-
-
-@tool("get_report_configurations", "List saved reports (filters and chart settings)")
-async def get_report_configurations(mm: MonarchMoney, args: Args) -> Any:
-    return (await q.execute(mm, q.GET_REPORT_CONFIGURATIONS)).get("reportConfigurations")
-
-
-@tool("create_report_configuration",
-      "Save a report with these filters and chart settings so it shows up in the web app",
-      {"display_name": string("Report name"), **REPORT_FILTERS, **REPORT_VIEW},
-      ["display_name"], WRITE)
-async def create_report_configuration(mm: MonarchMoney, args: Args) -> Any:
-    report: Args = {"displayName": args["display_name"],
-                    "transactionFilters": report_filters(args)}
-    view = report_view(args)
-    if view:
-        report["reportView"] = view
-    resp = await q.execute(mm, q.CREATE_REPORT_CONFIGURATION, {"input": report})
-    payload = resp.get("createReportConfiguration") or {}
-    q.raise_payload_errors(payload.get("errors"), "Report creation")
-    return payload.get("reportConfiguration")
-
-
-@tool("update_report_configuration",
-      "Rename a saved report (Monarch only allows changing the name)",
-      {"report_configuration_id": string("Saved report ID"),
-       "display_name": string("New name")},
-      ["report_configuration_id", "display_name"], WRITE)
-async def update_report_configuration(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.UPDATE_REPORT_CONFIGURATION, {"input": {
-        "id": args["report_configuration_id"], "displayName": args["display_name"]}})
-    payload = resp.get("updateReportConfiguration") or {}
-    q.raise_payload_errors(payload.get("errors"), "Report update")
-    return payload.get("reportConfiguration")
-
-
-@tool("delete_report_configuration", "Delete a saved report (transactions are not affected)",
-      {"report_configuration_id": string("Saved report ID")},
-      ["report_configuration_id"], DESTRUCTIVE)
-async def delete_report_configuration(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.DELETE_REPORT_CONFIGURATION,
-                           {"id": args["report_configuration_id"]})
-    payload = resp.get("deleteReportConfiguration") or {}
-    q.raise_payload_errors(payload.get("errors"), "Report deletion")
-    return {"report_configuration_id": args["report_configuration_id"],
-            "deleted": payload.get("deleted")}
-# --- Insights and recap -----------------------------------------------------
-
-def insight_enums(description: str, values: list[str]) -> Args:
-    return {"type": "array", "items": {"type": "string", "enum": values},
-            "description": description}
-
-
-INSIGHT_PAGE: Args = {
-    "limit": {"type": "integer", "description": "Maximum results to return", "default": 50},
-    "offset": {"type": "integer", "description": "Results to skip, for paging"},
-}
-INSIGHT_ID: Args = {"insight_id": string("Insight ID (see get_insights)")}
-
-
-async def insight_mutation(mm: MonarchMoney, request: GraphQLRequest, field: str,
-                           mutation_input: Args, action: str, result_key: str) -> Any:
-    resp = await q.execute(mm, request, {"input": mutation_input})
-    payload: Args = resp.get(field) or {}
-    q.raise_payload_errors(payload.get("errors"), action)
-    return payload.get(result_key)
-
-
-@tool("get_insights",
-      "List Monarch's personalized insights (tips about spending, bills, and savings shown "
-      "in the app's feed). With no filters, returns current insights",
-      {"status": insight_enums("Only insights with these statuses", q.INSIGHT_LIFECYCLE_STATUSES),
-       "bookmarked": boolean("Only bookmarked (true) or unbookmarked (false) insights"),
-       "dismissed": boolean("Only dismissed (true) or non-dismissed (false) insights"),
-       "unhelpful": boolean("Only insights marked unhelpful (true) or not (false)"),
-       **INSIGHT_PAGE})
-async def get_insights(mm: MonarchMoney, args: Args) -> Any:
-    variables = pick(args, {"status": "statuses", "bookmarked": "bookmarked",
-                            "dismissed": "dismissed", "unhelpful": "unhelpful",
-                            "offset": "offset"})
-    variables["limit"] = args.get("limit", 50)
-    return (await q.execute(mm, q.GET_INSIGHTS, variables)).get("insights")
-
-
-@tool("get_insight", "Get one insight", INSIGHT_ID, ["insight_id"])
-async def get_insight(mm: MonarchMoney, args: Args) -> Any:
-    return (await q.execute(mm, q.GET_INSIGHT, {"id": args["insight_id"]})).get("insight")
-
-
-@tool("get_insight_counts",
-      "Count completed, bookmarked, dismissed, and unhelpful insights, and the total value "
-      "insights have surfaced")
-async def get_insight_counts(mm: MonarchMoney, args: Args) -> Any:
-    return await q.execute(mm, q.GET_INSIGHT_COUNTS)
-
-
-@tool("update_insight_status",
-      "Change an insight's status, e.g. in_progress, completed, or denied (not interested; "
-      "undo with undo_insight_denial)",
-      {**INSIGHT_ID,
-       "status": string("New status", enum=q.INSIGHT_LIFECYCLE_STATUSES),
-       "denial_reason": string("Why the insight isn't useful (with status denied)"),
-       "allow_resurface": boolean("Let a denied insight come back later"),
-       "mute_subject": boolean("Stop showing insights about the same subject")},
-      ["insight_id", "status"], WRITE)
-async def update_insight_status(mm: MonarchMoney, args: Args) -> Any:
-    mutation_input = {"id": args["insight_id"], "status": args["status"],
-                      **pick(args, {"denial_reason": "denialReason",
-                                    "allow_resurface": "allowResurface",
-                                    "mute_subject": "muteSubject"})}
-    return await insight_mutation(mm, q.UPDATE_INSIGHT_STATUS, "updateInsightStatus",
-                                  mutation_input, "Insight status update", "insight")
-
-
-@tool("set_insight_bookmarked", "Bookmark or unbookmark an insight",
-      {**INSIGHT_ID, "bookmarked": boolean("true to bookmark, false to remove the bookmark")},
-      ["insight_id", "bookmarked"], WRITE)
-async def set_insight_bookmarked(mm: MonarchMoney, args: Args) -> Any:
-    return await insight_mutation(mm, q.SET_INSIGHT_BOOKMARKED, "setInsightBookmarked",
-                                  {"id": args["insight_id"], "bookmarked": args["bookmarked"]},
-                                  "Insight bookmark", "insight")
-
-
-@tool("set_insight_feedback",
-      "Rate an insight helpful (like) or unhelpful (dislike). Omit feedback to clear the rating",
-      {**INSIGHT_ID,
-       "feedback": string("Rating", enum=["like", "dislike"]),
-       "reason": string("Optional explanation")},
-      ["insight_id"], WRITE)
-async def set_insight_feedback(mm: MonarchMoney, args: Args) -> Any:
-    mutation_input = {"id": args["insight_id"], "feedback": args.get("feedback"),
-                      **pick(args, {"reason": "reason"})}
-    return await insight_mutation(mm, q.SET_INSIGHT_FEEDBACK, "setInsightFeedback",
-                                  mutation_input, "Insight feedback", "insight")
-
-
-@tool("dismiss_insight", "Dismiss an insight so it leaves the feed", INSIGHT_ID,
-      ["insight_id"], DESTRUCTIVE)
-async def dismiss_insight(mm: MonarchMoney, args: Args) -> Any:
-    return await insight_mutation(mm, q.SOFT_DELETE_INSIGHT, "softDeleteInsight",
-                                  {"id": args["insight_id"]}, "Insight dismissal", "deleted")
-
-
-@tool("undo_insight_denial", "Restore an insight that was marked denied (not interested)",
-      INSIGHT_ID, ["insight_id"], WRITE)
-async def undo_insight_denial(mm: MonarchMoney, args: Args) -> Any:
-    return await insight_mutation(mm, q.UNDO_INSIGHT_DENIAL, "undoInsightDenial",
-                                  {"id": args["insight_id"]}, "Insight denial undo", "insight")
-
-
-@tool("get_financial_insights",
-      "List savings opportunities Monarch found, such as cheaper plans, duplicate "
-      "subscriptions, or expired promotions, with estimated savings",
-      {"status": insight_enums("Only opportunities with these statuses",
-                           q.FINANCIAL_INSIGHT_STATUSES),
-       "opportunity_type": insight_enums("Only these kinds of opportunity", q.OPPORTUNITY_TYPES),
-       **INSIGHT_PAGE})
-async def get_financial_insights(mm: MonarchMoney, args: Args) -> Any:
-    variables = pick(args, {"status": "statuses", "opportunity_type": "opportunityTypes",
-                            "offset": "offset"})
-    variables["limit"] = args.get("limit", 50)
-    return (await q.execute(mm, q.GET_FINANCIAL_INSIGHTS, variables)).get("financialInsights")
-
-
-@tool("get_financial_insight",
-      "Get one savings opportunity with its suggested actions and step-by-step instructions",
-      {"financial_insight_id": string("Savings opportunity ID (see get_financial_insights)")},
-      ["financial_insight_id"])
-async def get_financial_insight(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.GET_FINANCIAL_INSIGHT, {"id": args["financial_insight_id"]})
-    return resp.get("financialInsight")
-
-
-@tool("get_financial_insight_summary",
-      "Summarize savings opportunities (identified and captured savings, counts by status) "
-      "and the latest scan for new ones. Without dates, covers all time",
-      DATE_RANGE)
-async def get_financial_insight_summary(mm: MonarchMoney, args: Args) -> Any:
-    start, end = date_range(args)
-    return await q.execute(mm, q.GET_FINANCIAL_INSIGHT_SUMMARY,
-                           {"startDate": start, "endDate": end})
-
-
-@tool("update_financial_insight_status",
-      "Change a savings opportunity's status, e.g. in_progress, completed, or denied",
-      {"financial_insight_id": string("Savings opportunity ID"),
-       "status": string("New status", enum=q.FINANCIAL_INSIGHT_STATUSES),
-       "execution_method": string("How you're acting on it: self_guided, or copilot "
-                                  "(Monarch's assistant helps)",
-                                  enum=["self_guided", "copilot"]),
-       "denial_reason": string("Why it isn't useful (with status denied)"),
-       "allow_resurface": boolean("Let a denied opportunity come back later")},
-      ["financial_insight_id", "status"], WRITE)
-async def update_financial_insight_status(mm: MonarchMoney, args: Args) -> Any:
-    mutation_input = {"id": args["financial_insight_id"], "status": args["status"],
-                      **pick(args, {"execution_method": "executionMethod",
-                                    "denial_reason": "denialReason",
-                                    "allow_resurface": "allowResurface"})}
-    return await insight_mutation(mm, q.UPDATE_FINANCIAL_INSIGHT_STATUS,
-                                  "updateFinancialInsightStatus", mutation_input,
-                                  "Savings opportunity status update", "financialInsight")
-
-
-# Monarch writes the weekly recap on first request; the web app polls like this.
-RECAP_POLL_INTERVAL = 2.0
-RECAP_POLL_ATTEMPTS = 15
-
-
-def last_recap_week(today: date) -> tuple[str, str]:
-    """The most recent finished Sunday-Saturday week, as the web app picks it."""
-    end = today - timedelta(days=(today.weekday() + 2) % 7 or 7)
-    return (end - timedelta(days=6)).isoformat(), end.isoformat()
-
-
-@tool("get_weekly_recap",
-      "Get Monarch's weekly recap: a written summary with cards on net worth, spending, and "
-      "recurring bills. Without dates, covers the last full Sunday-Saturday week. Monarch "
-      "may take a few seconds to write a new recap",
-      {"start_date": string("Week start (a Sunday) in YYYY-MM-DD format (requires end_date)"),
-       "end_date": string("Week end (a Saturday) in YYYY-MM-DD format (requires start_date)")})
-async def get_weekly_recap(mm: MonarchMoney, args: Args) -> Any:
-    start, end = date_range(args)
-    if not (start and end):
-        start, end = last_recap_week(date.today())
-    for attempt in range(RECAP_POLL_ATTEMPTS):
-        if attempt:
-            await asyncio.sleep(RECAP_POLL_INTERVAL)
-        recap = (await q.execute(mm, q.GET_WEEKLY_RECAP,
-                                 {"startDate": start, "endDate": end})).get("recap")
-        if recap:
-            return recap
-    raise RuntimeError(f"The recap for {start} to {end} isn't ready yet. Try again shortly.")
 # --- Investments ------------------------------------------------------------
 
 async def investment_mutation(mm: MonarchMoney, request: GraphQLRequest, variables: Args,
@@ -1846,183 +1370,128 @@ async def clear_security_classification(mm: MonarchMoney, args: Args) -> Any:
     return await investment_mutation(mm, q.CLEAR_SECURITY_CLASSIFICATION,
                                      {"securityId": args["security_id"]},
                                      "clearSecurityClassification", "Security classification reset")
-# --- Business and Schedule C ------------------------------------------------
-
-BUSINESS_ENTITY_FIELDS: Args = {
-    "name": string("Business name"),
-    "description": string("Short description"),
-    "notes": string("Notes"),
-    "color": string("Color, as a hex code like #3A7BD5"),
-    "structure": string("Legal structure", enum=q.BUSINESS_ENTITY_STRUCTURES),
-}
-BUSINESS_ENTITY_FIELD_NAMES = {k: k for k in BUSINESS_ENTITY_FIELDS}
-TAX_YEAR: Args = {"type": "integer", "description": "Tax year (default: this year)"}
 
 
-def required_date_range(args: Args) -> tuple[str, str]:
-    start, end = date_range(args)
-    if not start or not end:
-        raise ValueError("Provide both start_date and end_date.")
-    return start, end
+# --- Budget moves and flex --------------------------------------------------
+
+def this_month() -> str:
+    return date.today().replace(day=1).isoformat()
 
 
-def tax_year(args: Args) -> int:
-    year: int = args.get("tax_year") or date.today().year
-    return year
+def budget_endpoint(args: Args, side: str) -> Args:
+    """The from/to part of a money move: a category, a category group, or the flex bucket."""
+    category = args.get(f"{side}_category_id") or None
+    group = args.get(f"{side}_category_group_id") or None
+    flex = bool(args.get(f"{side}_flex"))
+    if [category is not None, group is not None, flex].count(True) != 1:
+        raise ValueError(f"Give exactly one of {side}_category_id, {side}_category_group_id, "
+                         f"or {side}_flex")
+    if flex:
+        return {f"{side}BudgetTarget": "flex_expense"}
+    if category:
+        return {f"{side}CategoryId": category}
+    return {f"{side}CategoryGroupId": group}
 
 
-@tool("get_business_entities",
-      "List the household's businesses, with their linked accounts and transaction counts")
-async def get_business_entities(mm: MonarchMoney, args: Args) -> Any:
-    return (await q.execute(mm, q.GET_BUSINESS_ENTITIES)).get("businessEntities")
+@tool("get_budget_settings",
+      "Get the budget system (fixed_and_flex or groups_and_categories), whether budget edits "
+      "apply to future months by default, the flex rollover period, and whether a budget exists")
+async def get_budget_settings(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_BUDGET_SETTINGS)
 
 
-@tool("get_business_entity", "Get one business",
-      {"business_entity_id": string("Business ID (see get_business_entities)")},
-      ["business_entity_id"])
-async def get_business_entity(mm: MonarchMoney, args: Args) -> Any:
-    entity_id = args["business_entity_id"]
-    entity = (await q.execute(mm, q.GET_BUSINESS_ENTITY, {"id": entity_id})).get("businessEntity")
-    if entity is None:
-        raise ValueError(f"No business entity with ID {entity_id}")
-    return entity
+@tool("move_budget_money",
+      "Move budgeted money from one category, category group, or the flex bucket to another "
+      "for one month, like the web app's Move Money. Give exactly one from_ and one to_.",
+      {"amount": number("Amount to move (greater than 0)"),
+       "start_date": string("Any day in the month to change, YYYY-MM-DD (default: current month)"),
+       "from_category_id": string("Take the money from this category"),
+       "from_category_group_id": string("Take the money from this category group"),
+       "from_flex": boolean("Take the money from the flex bucket (fixed_and_flex budgets)"),
+       "to_category_id": string("Give the money to this category"),
+       "to_category_group_id": string("Give the money to this category group"),
+       "to_flex": boolean("Give the money to the flex bucket (fixed_and_flex budgets)")},
+      ["amount"], WRITE)
+async def move_budget_money(mm: MonarchMoney, args: Args) -> Any:
+    if args["amount"] <= 0:
+        raise ValueError("amount must be greater than 0")
+    source, destination = budget_endpoint(args, "from"), budget_endpoint(args, "to")
+    if list(source.values()) == list(destination.values()):
+        raise ValueError("from_ and to_ must be different")
+    start = first_of_month(args, "start_date") or this_month()
+    resp = await q.execute(mm, q.MOVE_BUDGET_MONEY, {"input": {
+        "amount": args["amount"], "startDate": start, "timeframe": "month",
+        **source, **destination}})
+    payload = resp.get("moveMoneyBetweenCategories") or {}
+    q.raise_payload_errors(payload.get("errors"), "Moving budget money")
+    return {"start_date": start, "from": payload.get("fromBudgetItem"),
+            "to": payload.get("toBudgetItem")}
 
 
-@tool("get_business_entity_financials",
-      "Income, expenses, and net assets per business for a date range, with monthly breakdowns",
-      {"business_entity_ids": id_list("Businesses to include (default: all)"),
-       "start_date": string("Start date in YYYY-MM-DD format"),
-       "end_date": string("End date in YYYY-MM-DD format")},
-      ["start_date", "end_date"])
-async def get_business_entity_financials(mm: MonarchMoney, args: Args) -> Any:
-    start, end = required_date_range(args)
-    ids: list[str] = args.get("business_entity_ids") or []
-    if not ids:
-        entities: list[Args] = (await q.execute(mm, q.GET_BUSINESS_ENTITIES_SUMMARY)).get("businessEntities") or []
-        ids = [e["id"] for e in entities]
-    if not ids:
-        return []
-    resp = await q.execute(mm, q.GET_BUSINESS_ENTITY_FINANCIALS,
-                           {"entityIds": ids, "startDate": start, "endDate": end})
-    return resp.get("businessEntityFinancials")
+@tool("set_flex_budget_amount",
+      "Set the monthly flex bucket budget (fixed_and_flex budgets). An amount of 0 clears it.",
+      {"amount": number("Flex budget amount for the month"),
+       "start_date": string("Any day in the month to set, YYYY-MM-DD (default: current month)"),
+       "apply_to_future": boolean("Also apply the amount to all later months", False)},
+      ["amount"], WRITE)
+async def set_flex_budget_amount(mm: MonarchMoney, args: Args) -> Any:
+    start = first_of_month(args, "start_date")
+    apply_to_future = bool(args.get("apply_to_future", False))
+    resp = await mm.update_flexible_budget(amount=args["amount"], start_date=start,
+                                           apply_to_future=apply_to_future)
+    return {"start_date": start or "current month", "apply_to_future": apply_to_future,
+            "budget_item": (resp.get("updateOrCreateFlexBudgetItem") or {}).get("budgetItem")}
 
 
-@tool("get_business_entity_summaries",
-      "Transaction totals per business for a date range (income, expenses, savings). "
-      "by_category adds a per-business, per-category breakdown, useful for Schedule C.",
-      {"start_date": string("Start date in YYYY-MM-DD format"),
-       "end_date": string("End date in YYYY-MM-DD format"),
-       "business_entity_ids": id_list("Only these businesses (default: all)"),
-       "include_unassigned": boolean("With business_entity_ids, also include transactions "
-                                     "not assigned to any business"),
-       "by_category": boolean("Also break totals down by category", default=False)},
-      ["start_date", "end_date"])
-async def get_business_entity_summaries(mm: MonarchMoney, args: Args) -> Any:
-    start, end = required_date_range(args)
-    filters: Args = {"startDate": start, "endDate": end}
-    if args.get("business_entity_ids"):
-        filters["businessEntitySet"] = {"businessEntityIds": args["business_entity_ids"],
-                                        "includeUnassigned": bool(args.get("include_unassigned"))}
-    request = (q.GET_BUSINESS_ENTITY_REPORT_BY_CATEGORY if args.get("by_category")
-               else q.GET_BUSINESS_ENTITY_SUMMARIES)
-    return await q.execute(mm, request, {"filters": filters})
+@tool("update_budget_settings",
+      "Change budget settings: whether budget edits apply to future months by default, and flex "
+      "bucket rollover. Rollover fields you leave out keep their current values. Turning "
+      "rollover off discards the flex rollover period.",
+      {"apply_to_future_default": boolean("Apply budget edits to future months by default"),
+       "flex_rollover_enabled": boolean("Roll unspent flex budget over to the next month"),
+       "flex_rollover_start_month": string("Month flex rollover starts from, YYYY-MM-DD"),
+       "flex_rollover_starting_balance": number("Flex rollover balance at the start month")},
+      annotations=DESTRUCTIVE)
+async def update_budget_settings(mm: MonarchMoney, args: Args) -> Any:
+    settings: Args = {}
+    if "apply_to_future_default" in args:
+        settings["budgetApplyToFutureMonthsDefault"] = args["apply_to_future_default"]
+    rollover_args = ("flex_rollover_enabled", "flex_rollover_start_month",
+                     "flex_rollover_starting_balance")
+    if any(key in args for key in rollover_args):
+        # Like the web app, send the whole rollover setting, filling gaps from the current period.
+        current = (await q.execute(mm, q.GET_BUDGET_SETTINGS)).get("flexExpenseRolloverPeriod") or {}
+        settings["rolloverEnabled"] = args.get("flex_rollover_enabled", True)
+        settings["rolloverStartMonth"] = (first_of_month(args, "flex_rollover_start_month")
+                                          or current.get("startMonth") or this_month())
+        settings["rolloverStartingBalance"] = args.get(
+            "flex_rollover_starting_balance", current.get("startingBalance") or 0)
+    if not settings:
+        raise ValueError("Nothing to update: give at least one setting")
+    resp = await q.execute(mm, q.UPDATE_BUDGET_SETTINGS, {"input": settings})
+    return resp.get("updateBudgetSettings")
 
 
-async def upsert_business_entity(mm: MonarchMoney, entity: Args) -> Any:
-    resp = await q.execute(mm, q.UPSERT_BUSINESS_ENTITY, {"input": entity})
-    payload = resp.get("upsertBusinessEntity") or {}
-    q.raise_payload_errors(payload.get("errors"), "Business entity save")
-    return payload.get("businessEntity")
+@tool("reset_budget_rollover",
+      "Restart rollover for a category or category group from a given month, discarding the "
+      "rollover balance accumulated before it",
+      {"category_id": string("Category to reset"),
+       "category_group_id": string("Category group to reset"),
+       "start_month": string("Month the new rollover period starts, YYYY-MM-DD"),
+       "starting_balance": number("Rollover balance to start with (default: 0)")},
+      ["start_month"], DESTRUCTIVE)
+async def reset_budget_rollover(mm: MonarchMoney, args: Args) -> Any:
+    target = pick(args, {"category_id": "categoryId", "category_group_id": "categoryGroupId"})
+    if len(target) != 1:
+        raise ValueError("Give exactly one of category_id or category_group_id")
+    resp = await q.execute(mm, q.RESET_BUDGET_ROLLOVER, {"input": {
+        **target, "startMonth": require_date_arg(args, "start_month")[:8] + "01",
+        **pick(args, {"starting_balance": "startingBalance"})}})
+    payload = resp.get("resetBudgetRollover") or {}
+    q.raise_payload_errors(payload.get("errors"), "Rollover reset")
+    return payload.get("budgetRolloverPeriod")
 
 
-@tool("create_business_entity",
-      "Create a business, to track its accounts and transactions separately",
-      BUSINESS_ENTITY_FIELDS, ["name"], WRITE)
-async def create_business_entity(mm: MonarchMoney, args: Args) -> Any:
-    return await upsert_business_entity(mm, pick(args, BUSINESS_ENTITY_FIELD_NAMES))
-
-
-@tool("update_business_entity", "Update a business's details",
-      {"business_entity_id": string("Business ID (see get_business_entities)"),
-       **BUSINESS_ENTITY_FIELDS},
-      ["business_entity_id"], WRITE)
-async def update_business_entity(mm: MonarchMoney, args: Args) -> Any:
-    changes = pick(args, BUSINESS_ENTITY_FIELD_NAMES)
-    if not changes:
-        raise ValueError("Nothing to update: give at least one field to change")
-    return await upsert_business_entity(mm, {"id": args["business_entity_id"], **changes})
-
-
-@tool("delete_business_entity",
-      "Delete a business. Its accounts and transactions stay, but are no longer assigned to it.",
-      {"business_entity_id": string("Business ID")}, ["business_entity_id"], DESTRUCTIVE)
-async def delete_business_entity(mm: MonarchMoney, args: Args) -> Any:
-    entity_id = args["business_entity_id"]
-    resp = await q.execute(mm, q.DELETE_BUSINESS_ENTITY, {"id": entity_id})
-    payload = resp.get("deleteBusinessEntity") or {}
-    q.raise_payload_errors(payload.get("errors"), "Business entity deletion")
-    return {"business_entity_id": entity_id, "deleted": payload.get("deleted")}
-
-
-@tool("set_account_business_entity",
-      "Assign accounts to a business, or leave business_entity_id out to unassign them. "
-      "To assign transactions, use update_transaction or bulk_update_transactions.",
-      {"account_ids": id_list("Accounts to change"),
-       "business_entity_id": string("Business to assign them to (omit to unassign)")},
-      ["account_ids"], WRITE)
-async def set_account_business_entity(mm: MonarchMoney, args: Args) -> Any:
-    entity_id = args.get("business_entity_id") or None
-    updates = [{"id": account_id, "businessEntityId": entity_id} for account_id in args["account_ids"]]
-    resp = await q.execute(mm, q.UPDATE_ACCOUNTS_BUSINESS_ENTITY, {"input": updates})
-    payload = resp.get("updateAccounts") or {}
-    q.raise_payload_errors(payload.get("errors"), "Account business assignment")
-    return payload.get("accounts")
-
-
-@tool("get_schedule_c_line_items", "List the IRS Schedule C line items Monarch can map categories to",
-      {"tax_year": TAX_YEAR})
-async def get_schedule_c_line_items(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.GET_SCHEDULE_C_LINE_ITEMS, {"taxYear": tax_year(args)})
-    return resp.get("scheduleCLineItems")
-
-
-@tool("get_schedule_c_category_mappings", "List which categories map to which Schedule C lines",
-      {"tax_year": TAX_YEAR})
-async def get_schedule_c_category_mappings(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.GET_TAX_SCHEDULE_CATEGORY_MAPPINGS,
-                           {"schedule": "schedule_c", "taxYear": tax_year(args)})
-    return resp.get("taxScheduleCategoryMappings")
-
-
-@tool("set_schedule_c_category_mapping",
-      "Map a category to a Schedule C line for a tax year (replaces its existing mapping)",
-      {"category_id": string("Category ID"),
-       "line_item": string("Schedule C line (see get_schedule_c_line_items)",
-                           enum=q.SCHEDULE_C_LINE_ITEMS),
-       "tax_year": TAX_YEAR},
-      ["category_id", "line_item"], WRITE)
-async def set_schedule_c_category_mapping(mm: MonarchMoney, args: Args) -> Any:
-    resp = await q.execute(mm, q.ASSIGN_TAX_SCHEDULE_CATEGORY_MAPPING, {"input": {
-        "categoryId": args["category_id"],
-        "lineItem": args["line_item"],
-        "schedule": "schedule_c",
-        "taxYear": tax_year(args),
-    }})
-    payload = resp.get("assignTaxScheduleCategoryMapping") or {}
-    q.raise_payload_errors(payload.get("errors"), "Schedule C mapping")
-    return payload.get("taxScheduleCategoryMapping")
-
-
-@tool("delete_schedule_c_category_mapping", "Remove a category's Schedule C mapping for a tax year",
-      {"category_id": string("Category ID"), "tax_year": TAX_YEAR},
-      ["category_id"], DESTRUCTIVE)
-async def delete_schedule_c_category_mapping(mm: MonarchMoney, args: Args) -> Any:
-    year = tax_year(args)
-    resp = await q.execute(mm, q.DELETE_TAX_SCHEDULE_CATEGORY_MAPPING, {"input": {
-        "categoryId": args["category_id"], "schedule": "schedule_c", "taxYear": year}})
-    payload = resp.get("deleteTaxScheduleCategoryMapping") or {}
-    q.raise_payload_errors(payload.get("errors"), "Schedule C mapping deletion")
-    return {"category_id": args["category_id"], "tax_year": year, "deleted": payload.get("deleted")}
 # --- Forecasting and paychecks ----------------------------------------------
 
 async def forecast_mutation(mm: MonarchMoney, request: GraphQLRequest, field: str,
@@ -2335,124 +1804,667 @@ async def update_paycheck_employer(mm: MonarchMoney, args: Args) -> Any:
 async def delete_paycheck_employer(mm: MonarchMoney, args: Args) -> Any:
     return await forecast_mutation(mm, q.DELETE_PAYCHECK_EMPLOYER, "deletePaycheckEmployer",
                                   {"id": args["employer_id"]}, "Paycheck employer deletion")
-# --- Budget moves and flex --------------------------------------------------
-
-def this_month() -> str:
-    return date.today().replace(day=1).isoformat()
 
 
-def budget_endpoint(args: Args, side: str) -> Args:
-    """The from/to part of a money move: a category, a category group, or the flex bucket."""
-    category = args.get(f"{side}_category_id") or None
-    group = args.get(f"{side}_category_group_id") or None
-    flex = bool(args.get(f"{side}_flex"))
-    if [category is not None, group is not None, flex].count(True) != 1:
-        raise ValueError(f"Give exactly one of {side}_category_id, {side}_category_group_id, "
-                         f"or {side}_flex")
-    if flex:
-        return {f"{side}BudgetTarget": "flex_expense"}
-    if category:
-        return {f"{side}CategoryId": category}
-    return {f"{side}CategoryGroupId": group}
+# --- Business and Schedule C ------------------------------------------------
+
+BUSINESS_ENTITY_FIELDS: Args = {
+    "name": string("Business name"),
+    "description": string("Short description"),
+    "notes": string("Notes"),
+    "color": string("Color, as a hex code like #3A7BD5"),
+    "structure": string("Legal structure", enum=q.BUSINESS_ENTITY_STRUCTURES),
+}
+BUSINESS_ENTITY_FIELD_NAMES = {k: k for k in BUSINESS_ENTITY_FIELDS}
+TAX_YEAR: Args = {"type": "integer", "description": "Tax year (default: this year)"}
 
 
-@tool("get_budget_settings",
-      "Get the budget system (fixed_and_flex or groups_and_categories), whether budget edits "
-      "apply to future months by default, the flex rollover period, and whether a budget exists")
-async def get_budget_settings(mm: MonarchMoney, args: Args) -> Any:
-    return await q.execute(mm, q.GET_BUDGET_SETTINGS)
+def required_date_range(args: Args) -> tuple[str, str]:
+    start, end = date_range(args)
+    if not start or not end:
+        raise ValueError("Provide both start_date and end_date.")
+    return start, end
 
 
-@tool("move_budget_money",
-      "Move budgeted money from one category, category group, or the flex bucket to another "
-      "for one month, like the web app's Move Money. Give exactly one from_ and one to_.",
-      {"amount": number("Amount to move (greater than 0)"),
-       "start_date": string("Any day in the month to change, YYYY-MM-DD (default: current month)"),
-       "from_category_id": string("Take the money from this category"),
-       "from_category_group_id": string("Take the money from this category group"),
-       "from_flex": boolean("Take the money from the flex bucket (fixed_and_flex budgets)"),
-       "to_category_id": string("Give the money to this category"),
-       "to_category_group_id": string("Give the money to this category group"),
-       "to_flex": boolean("Give the money to the flex bucket (fixed_and_flex budgets)")},
-      ["amount"], WRITE)
-async def move_budget_money(mm: MonarchMoney, args: Args) -> Any:
-    if args["amount"] <= 0:
-        raise ValueError("amount must be greater than 0")
-    source, destination = budget_endpoint(args, "from"), budget_endpoint(args, "to")
-    if list(source.values()) == list(destination.values()):
-        raise ValueError("from_ and to_ must be different")
-    start = first_of_month(args, "start_date") or this_month()
-    resp = await q.execute(mm, q.MOVE_BUDGET_MONEY, {"input": {
-        "amount": args["amount"], "startDate": start, "timeframe": "month",
-        **source, **destination}})
-    payload = resp.get("moveMoneyBetweenCategories") or {}
-    q.raise_payload_errors(payload.get("errors"), "Moving budget money")
-    return {"start_date": start, "from": payload.get("fromBudgetItem"),
-            "to": payload.get("toBudgetItem")}
+def tax_year(args: Args) -> int:
+    year: int = args.get("tax_year") or date.today().year
+    return year
 
 
-@tool("set_flex_budget_amount",
-      "Set the monthly flex bucket budget (fixed_and_flex budgets). An amount of 0 clears it.",
-      {"amount": number("Flex budget amount for the month"),
-       "start_date": string("Any day in the month to set, YYYY-MM-DD (default: current month)"),
-       "apply_to_future": boolean("Also apply the amount to all later months", False)},
-      ["amount"], WRITE)
-async def set_flex_budget_amount(mm: MonarchMoney, args: Args) -> Any:
-    start = first_of_month(args, "start_date")
-    apply_to_future = bool(args.get("apply_to_future", False))
-    resp = await mm.update_flexible_budget(amount=args["amount"], start_date=start,
-                                           apply_to_future=apply_to_future)
-    return {"start_date": start or "current month", "apply_to_future": apply_to_future,
-            "budget_item": (resp.get("updateOrCreateFlexBudgetItem") or {}).get("budgetItem")}
+@tool("get_business_entities",
+      "List the household's businesses, with their linked accounts and transaction counts")
+async def get_business_entities(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_BUSINESS_ENTITIES)).get("businessEntities")
 
 
-@tool("update_budget_settings",
-      "Change budget settings: whether budget edits apply to future months by default, and flex "
-      "bucket rollover. Rollover fields you leave out keep their current values. Turning "
-      "rollover off discards the flex rollover period.",
-      {"apply_to_future_default": boolean("Apply budget edits to future months by default"),
-       "flex_rollover_enabled": boolean("Roll unspent flex budget over to the next month"),
-       "flex_rollover_start_month": string("Month flex rollover starts from, YYYY-MM-DD"),
-       "flex_rollover_starting_balance": number("Flex rollover balance at the start month")},
-      annotations=DESTRUCTIVE)
-async def update_budget_settings(mm: MonarchMoney, args: Args) -> Any:
-    settings: Args = {}
-    if "apply_to_future_default" in args:
-        settings["budgetApplyToFutureMonthsDefault"] = args["apply_to_future_default"]
-    rollover_args = ("flex_rollover_enabled", "flex_rollover_start_month",
-                     "flex_rollover_starting_balance")
-    if any(key in args for key in rollover_args):
-        # Like the web app, send the whole rollover setting, filling gaps from the current period.
-        current = (await q.execute(mm, q.GET_BUDGET_SETTINGS)).get("flexExpenseRolloverPeriod") or {}
-        settings["rolloverEnabled"] = args.get("flex_rollover_enabled", True)
-        settings["rolloverStartMonth"] = (first_of_month(args, "flex_rollover_start_month")
-                                          or current.get("startMonth") or this_month())
-        settings["rolloverStartingBalance"] = args.get(
-            "flex_rollover_starting_balance", current.get("startingBalance") or 0)
-    if not settings:
-        raise ValueError("Nothing to update: give at least one setting")
-    resp = await q.execute(mm, q.UPDATE_BUDGET_SETTINGS, {"input": settings})
-    return resp.get("updateBudgetSettings")
+@tool("get_business_entity", "Get one business",
+      {"business_entity_id": string("Business ID (see get_business_entities)")},
+      ["business_entity_id"])
+async def get_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    entity_id = args["business_entity_id"]
+    entity = (await q.execute(mm, q.GET_BUSINESS_ENTITY, {"id": entity_id})).get("businessEntity")
+    if entity is None:
+        raise ValueError(f"No business entity with ID {entity_id}")
+    return entity
 
 
-@tool("reset_budget_rollover",
-      "Restart rollover for a category or category group from a given month, discarding the "
-      "rollover balance accumulated before it",
-      {"category_id": string("Category to reset"),
-       "category_group_id": string("Category group to reset"),
-       "start_month": string("Month the new rollover period starts, YYYY-MM-DD"),
-       "starting_balance": number("Rollover balance to start with (default: 0)")},
-      ["start_month"], DESTRUCTIVE)
-async def reset_budget_rollover(mm: MonarchMoney, args: Args) -> Any:
-    target = pick(args, {"category_id": "categoryId", "category_group_id": "categoryGroupId"})
-    if len(target) != 1:
-        raise ValueError("Give exactly one of category_id or category_group_id")
-    resp = await q.execute(mm, q.RESET_BUDGET_ROLLOVER, {"input": {
-        **target, "startMonth": require_date_arg(args, "start_month")[:8] + "01",
-        **pick(args, {"starting_balance": "startingBalance"})}})
-    payload = resp.get("resetBudgetRollover") or {}
-    q.raise_payload_errors(payload.get("errors"), "Rollover reset")
-    return payload.get("budgetRolloverPeriod")
+@tool("get_business_entity_financials",
+      "Income, expenses, and net assets per business for a date range, with monthly breakdowns",
+      {"business_entity_ids": id_list("Businesses to include (default: all)"),
+       "start_date": string("Start date in YYYY-MM-DD format"),
+       "end_date": string("End date in YYYY-MM-DD format")},
+      ["start_date", "end_date"])
+async def get_business_entity_financials(mm: MonarchMoney, args: Args) -> Any:
+    start, end = required_date_range(args)
+    ids: list[str] = args.get("business_entity_ids") or []
+    if not ids:
+        entities: list[Args] = (await q.execute(mm, q.GET_BUSINESS_ENTITIES_SUMMARY)).get("businessEntities") or []
+        ids = [e["id"] for e in entities]
+    if not ids:
+        return []
+    resp = await q.execute(mm, q.GET_BUSINESS_ENTITY_FINANCIALS,
+                           {"entityIds": ids, "startDate": start, "endDate": end})
+    return resp.get("businessEntityFinancials")
+
+
+@tool("get_business_entity_summaries",
+      "Transaction totals per business for a date range (income, expenses, savings). "
+      "by_category adds a per-business, per-category breakdown, useful for Schedule C.",
+      {"start_date": string("Start date in YYYY-MM-DD format"),
+       "end_date": string("End date in YYYY-MM-DD format"),
+       "business_entity_ids": id_list("Only these businesses (default: all)"),
+       "include_unassigned": boolean("With business_entity_ids, also include transactions "
+                                     "not assigned to any business"),
+       "by_category": boolean("Also break totals down by category", default=False)},
+      ["start_date", "end_date"])
+async def get_business_entity_summaries(mm: MonarchMoney, args: Args) -> Any:
+    start, end = required_date_range(args)
+    filters: Args = {"startDate": start, "endDate": end}
+    if args.get("business_entity_ids"):
+        filters["businessEntitySet"] = {"businessEntityIds": args["business_entity_ids"],
+                                        "includeUnassigned": bool(args.get("include_unassigned"))}
+    request = (q.GET_BUSINESS_ENTITY_REPORT_BY_CATEGORY if args.get("by_category")
+               else q.GET_BUSINESS_ENTITY_SUMMARIES)
+    return await q.execute(mm, request, {"filters": filters})
+
+
+async def upsert_business_entity(mm: MonarchMoney, entity: Args) -> Any:
+    resp = await q.execute(mm, q.UPSERT_BUSINESS_ENTITY, {"input": entity})
+    payload = resp.get("upsertBusinessEntity") or {}
+    q.raise_payload_errors(payload.get("errors"), "Business entity save")
+    return payload.get("businessEntity")
+
+
+@tool("create_business_entity",
+      "Create a business, to track its accounts and transactions separately",
+      BUSINESS_ENTITY_FIELDS, ["name"], WRITE)
+async def create_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    return await upsert_business_entity(mm, pick(args, BUSINESS_ENTITY_FIELD_NAMES))
+
+
+@tool("update_business_entity", "Update a business's details",
+      {"business_entity_id": string("Business ID (see get_business_entities)"),
+       **BUSINESS_ENTITY_FIELDS},
+      ["business_entity_id"], WRITE)
+async def update_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    changes = pick(args, BUSINESS_ENTITY_FIELD_NAMES)
+    if not changes:
+        raise ValueError("Nothing to update: give at least one field to change")
+    return await upsert_business_entity(mm, {"id": args["business_entity_id"], **changes})
+
+
+@tool("delete_business_entity",
+      "Delete a business. Its accounts and transactions stay, but are no longer assigned to it.",
+      {"business_entity_id": string("Business ID")}, ["business_entity_id"], DESTRUCTIVE)
+async def delete_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    entity_id = args["business_entity_id"]
+    resp = await q.execute(mm, q.DELETE_BUSINESS_ENTITY, {"id": entity_id})
+    payload = resp.get("deleteBusinessEntity") or {}
+    q.raise_payload_errors(payload.get("errors"), "Business entity deletion")
+    return {"business_entity_id": entity_id, "deleted": payload.get("deleted")}
+
+
+@tool("set_account_business_entity",
+      "Assign accounts to a business, or leave business_entity_id out to unassign them. "
+      "To assign transactions, use update_transaction or bulk_update_transactions.",
+      {"account_ids": id_list("Accounts to change"),
+       "business_entity_id": string("Business to assign them to (omit to unassign)")},
+      ["account_ids"], WRITE)
+async def set_account_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    entity_id = args.get("business_entity_id") or None
+    updates = [{"id": account_id, "businessEntityId": entity_id} for account_id in args["account_ids"]]
+    resp = await q.execute(mm, q.UPDATE_ACCOUNTS_BUSINESS_ENTITY, {"input": updates})
+    payload = resp.get("updateAccounts") or {}
+    q.raise_payload_errors(payload.get("errors"), "Account business assignment")
+    return payload.get("accounts")
+
+
+@tool("get_schedule_c_line_items", "List the IRS Schedule C line items Monarch can map categories to",
+      {"tax_year": TAX_YEAR})
+async def get_schedule_c_line_items(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_SCHEDULE_C_LINE_ITEMS, {"taxYear": tax_year(args)})
+    return resp.get("scheduleCLineItems")
+
+
+@tool("get_schedule_c_category_mappings", "List which categories map to which Schedule C lines",
+      {"tax_year": TAX_YEAR})
+async def get_schedule_c_category_mappings(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_TAX_SCHEDULE_CATEGORY_MAPPINGS,
+                           {"schedule": "schedule_c", "taxYear": tax_year(args)})
+    return resp.get("taxScheduleCategoryMappings")
+
+
+@tool("set_schedule_c_category_mapping",
+      "Map a category to a Schedule C line for a tax year (replaces its existing mapping)",
+      {"category_id": string("Category ID"),
+       "line_item": string("Schedule C line (see get_schedule_c_line_items)",
+                           enum=q.SCHEDULE_C_LINE_ITEMS),
+       "tax_year": TAX_YEAR},
+      ["category_id", "line_item"], WRITE)
+async def set_schedule_c_category_mapping(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.ASSIGN_TAX_SCHEDULE_CATEGORY_MAPPING, {"input": {
+        "categoryId": args["category_id"],
+        "lineItem": args["line_item"],
+        "schedule": "schedule_c",
+        "taxYear": tax_year(args),
+    }})
+    payload = resp.get("assignTaxScheduleCategoryMapping") or {}
+    q.raise_payload_errors(payload.get("errors"), "Schedule C mapping")
+    return payload.get("taxScheduleCategoryMapping")
+
+
+@tool("delete_schedule_c_category_mapping", "Remove a category's Schedule C mapping for a tax year",
+      {"category_id": string("Category ID"), "tax_year": TAX_YEAR},
+      ["category_id"], DESTRUCTIVE)
+async def delete_schedule_c_category_mapping(mm: MonarchMoney, args: Args) -> Any:
+    year = tax_year(args)
+    resp = await q.execute(mm, q.DELETE_TAX_SCHEDULE_CATEGORY_MAPPING, {"input": {
+        "categoryId": args["category_id"], "schedule": "schedule_c", "taxYear": year}})
+    payload = resp.get("deleteTaxScheduleCategoryMapping") or {}
+    q.raise_payload_errors(payload.get("errors"), "Schedule C mapping deletion")
+    return {"category_id": args["category_id"], "tax_year": year, "deleted": payload.get("deleted")}
+
+
+# --- Reports ----------------------------------------------------------------
+
+REPORT_FILTERS: Args = {
+    **DATE_RANGE,
+    "relative_period": {
+        "type": "object",
+        "description": "Instead of dates: the last N days/weeks/months/quarters/years",
+        "properties": {
+            "unit": {"type": "string", "enum": ["day", "week", "month", "quarter", "year"]},
+            "value": {"type": "integer", "minimum": 1},
+            "include_current": {"type": "boolean", "default": True,
+                                "description": "Count the current period as one of the N"},
+        },
+        "required": ["unit", "value"],
+        "additionalProperties": False,
+    },
+    "category_type": string("Only expense, income, or transfer transactions",
+                            enum=["expense", "income", "transfer"]),
+    "account_ids": id_list("Only these accounts"),
+    "category_ids": id_list("Only these categories"),
+    "exclude_category_ids": id_list("Leave out these categories"),
+    "category_group_ids": id_list("Only these category groups"),
+    "merchant_ids": id_list("Only these merchants"),
+    "tag_ids": id_list("Only transactions with any of these tags"),
+    "is_untagged": boolean("Only transactions without tags"),
+    "is_uncategorized": boolean("Only uncategorized transactions"),
+    "search": string("Free-text search (merchant, notes, etc.)"),
+    "min_amount": number("Minimum absolute amount"),
+    "max_amount": number("Maximum absolute amount"),
+    "budget_variability": string("Only categories with this budget type",
+                                 enum=["fixed", "flexible", "non_monthly"]),
+    "owner_user_ids": id_list("Only transactions owned by these household members"),
+    "include_jointly_owned": boolean("With owner_user_ids, also include joint transactions "
+                                     "(default true)"),
+    "business_entity_ids": id_list("Only transactions for these businesses"),
+    "include_unassigned_business": boolean("With business_entity_ids, also include transactions "
+                                           "without a business (default false)"),
+    "hidden_from_reports": boolean("Only hidden (true) or visible (false) transactions"),
+    "is_recurring": boolean("Only recurring (true) or non-recurring (false) transactions"),
+    "is_pending": boolean("Only pending (true) or posted (false) transactions"),
+    "is_split": boolean("Only split (true) or unsplit (false) transactions"),
+    "is_investment_account": boolean("Only transactions in investment accounts (true) or not"),
+    "has_notes": boolean("Only transactions with (true) or without (false) notes"),
+    "has_attachments": boolean("Only transactions with (true) or without (false) attachments"),
+    "needs_review": boolean("Only transactions that need review (true) or not"),
+    "credits_only": boolean("Only credits (money in)"),
+    "debits_only": boolean("Only debits (money out)"),
+}
+
+REPORT_FILTER_FIELDS = {
+    "category_type": "categoryType",
+    "account_ids": "accounts",
+    "category_ids": "categories",
+    "exclude_category_ids": "excludeCategories",
+    "category_group_ids": "categoryGroups",
+    "merchant_ids": "merchants",
+    "tag_ids": "tags",
+    "is_untagged": "isUntagged",
+    "is_uncategorized": "isUncategorized",
+    "search": "search",
+    "min_amount": "absAmountGte",
+    "max_amount": "absAmountLte",
+    "budget_variability": "budgetVariability",
+    "hidden_from_reports": "hideFromReports",
+    "is_recurring": "isRecurring",
+    "is_pending": "isPending",
+    "is_split": "isSplit",
+    "is_investment_account": "isInvestmentAccount",
+    "has_notes": "hasNotes",
+    "has_attachments": "hasAttachments",
+    "needs_review": "needsReview",
+    "credits_only": "creditsOnly",
+    "debits_only": "debitsOnly",
+}
+
+REPORT_GROUPS = ["category", "category_group", "merchant", "business_entity",
+                 "budget_variability", "owner"]
+REPORT_TYPES = ["cashFlow", "income", "spending"]
+CHART_TYPES = {
+    # The web app derives chartCalculation from the chart type.
+    "pieChart": "totalAmounts",
+    "horizontalBarChart": "totalAmounts",
+    "treemapChart": "totalAmounts",
+    "sankeyCashFlowChart": "totalAmounts",
+    "profitLossTable": "totalAmounts",
+    "barChart": "changeOverTime",
+    "stackedBarChart": "changeOverTime",
+    "cashFlowChart": "changeOverTime",
+    "stackedCashFlowChart": "changeOverTime",
+}
+REPORT_VIEW: Args = {
+    "report_type": string("Which report page it opens as", enum=REPORT_TYPES),
+    "chart_type": string("How the web app charts it", enum=list(CHART_TYPES)),
+    "timeframe": string("Time bucket for charts over time",
+                        enum=["day", "week", "month", "quarter", "year"]),
+}
+
+
+def report_filters(args: Args) -> Args:
+    """TransactionFilterInput from the REPORT_FILTERS arguments."""
+    start, end = date_range(args)
+    period = args.get("relative_period")
+    if period and start:
+        raise ValueError("Give either start_date/end_date or relative_period, not both.")
+    filters: Args = {}
+    if start:
+        filters.update(startDate=start, endDate=end)
+    filters.update(pick(args, REPORT_FILTER_FIELDS))
+    if period:
+        filters["timeframePeriod"] = {"unit": period["unit"], "value": period["value"],
+                                      "includeCurrent": period.get("include_current", True)}
+    if args.get("owner_user_ids"):
+        filters["ownershipSet"] = {"userIds": args["owner_user_ids"],
+                                   "includeJointlyOwned": args.get("include_jointly_owned", True)}
+    if args.get("business_entity_ids"):
+        filters["businessEntitySet"] = {
+            "businessEntityIds": args["business_entity_ids"],
+            "includeUnassigned": args.get("include_unassigned_business", False)}
+    return filters
+
+
+def report_view(args: Args) -> Args | None:
+    view = pick(args, {"report_type": "analysisScope", "chart_type": "chartType",
+                       "timeframe": "timeframe"})
+    if "chart_type" in args:
+        view["chartCalculation"] = CHART_TYPES[args["chart_type"]]
+    return view or None
+
+
+@tool("get_report",
+      "Totals for transactions matching the filters, optionally grouped by category, merchant, "
+      "etc. and/or by time period, like the web app's Reports page. Returns each group's "
+      "summary (sum, avg, count, max, income, expense, savings) and the overall total. "
+      "Expenses are negative.",
+      {**REPORT_FILTERS,
+       "group_by": {"type": "array", "maxItems": 2, "description": "Group by these, e.g. "
+                    "[\"category\"] (combine with timeframe for a breakdown per period)",
+                    "items": {"type": "string", "enum": REPORT_GROUPS}},
+       "timeframe": string("Also group by this period",
+                           enum=["day", "week", "month", "quarter", "year"]),
+       "sort_by": string("Order groups by this summary value",
+                         enum=["sum", "sum_expense", "sum_income", "sum_transfer", "avg",
+                               "avg_expense", "avg_income", "count", "max", "max_expense",
+                               "max_income", "min", "first", "last"]),
+       "fill_empty_values": boolean("Include empty periods with zero values", False)})
+async def get_report(mm: MonarchMoney, args: Args) -> Any:
+    groups: list[str] = args.get("group_by") or []
+    variables: Args = {
+        "filters": report_filters(args),
+        "fillEmptyValues": args.get("fill_empty_values", False),
+        **{f"include{''.join(w.title() for w in g.split('_'))}": g in groups
+           for g in REPORT_GROUPS},
+        **pick(args, {"timeframe": "groupByTimeframe", "sort_by": "sortBy"}),
+    }
+    if groups:
+        variables["groupBy"] = groups
+    resp = await q.execute(mm, q.GET_REPORTS_DATA, variables)
+    aggregates = resp.get("aggregates") or []
+    return {
+        "groups": [{"group": {k: v for k, v in (row.get("groupBy") or {}).items() if v is not None},
+                    "summary": row.get("summary")} for row in resp.get("reports") or []],
+        "total": aggregates[0].get("summary") if aggregates else None,
+    }
+
+
+@tool("get_report_configurations", "List saved reports (filters and chart settings)")
+async def get_report_configurations(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_REPORT_CONFIGURATIONS)).get("reportConfigurations")
+
+
+@tool("create_report_configuration",
+      "Save a report with these filters and chart settings so it shows up in the web app",
+      {"display_name": string("Report name"), **REPORT_FILTERS, **REPORT_VIEW},
+      ["display_name"], WRITE)
+async def create_report_configuration(mm: MonarchMoney, args: Args) -> Any:
+    report: Args = {"displayName": args["display_name"],
+                    "transactionFilters": report_filters(args)}
+    view = report_view(args)
+    if view:
+        report["reportView"] = view
+    resp = await q.execute(mm, q.CREATE_REPORT_CONFIGURATION, {"input": report})
+    payload = resp.get("createReportConfiguration") or {}
+    q.raise_payload_errors(payload.get("errors"), "Report creation")
+    return payload.get("reportConfiguration")
+
+
+@tool("update_report_configuration",
+      "Rename a saved report (Monarch only allows changing the name)",
+      {"report_configuration_id": string("Saved report ID"),
+       "display_name": string("New name")},
+      ["report_configuration_id", "display_name"], WRITE)
+async def update_report_configuration(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.UPDATE_REPORT_CONFIGURATION, {"input": {
+        "id": args["report_configuration_id"], "displayName": args["display_name"]}})
+    payload = resp.get("updateReportConfiguration") or {}
+    q.raise_payload_errors(payload.get("errors"), "Report update")
+    return payload.get("reportConfiguration")
+
+
+@tool("delete_report_configuration", "Delete a saved report (transactions are not affected)",
+      {"report_configuration_id": string("Saved report ID")},
+      ["report_configuration_id"], DESTRUCTIVE)
+async def delete_report_configuration(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.DELETE_REPORT_CONFIGURATION,
+                           {"id": args["report_configuration_id"]})
+    payload = resp.get("deleteReportConfiguration") or {}
+    q.raise_payload_errors(payload.get("errors"), "Report deletion")
+    return {"report_configuration_id": args["report_configuration_id"],
+            "deleted": payload.get("deleted")}
+
+
+# --- Insights and recap -----------------------------------------------------
+
+def insight_enums(description: str, values: list[str]) -> Args:
+    return {"type": "array", "items": {"type": "string", "enum": values},
+            "description": description}
+
+
+INSIGHT_PAGE: Args = {
+    "limit": {"type": "integer", "description": "Maximum results to return", "default": 50},
+    "offset": {"type": "integer", "description": "Results to skip, for paging"},
+}
+INSIGHT_ID: Args = {"insight_id": string("Insight ID (see get_insights)")}
+
+
+async def insight_mutation(mm: MonarchMoney, request: GraphQLRequest, field: str,
+                           mutation_input: Args, action: str, result_key: str) -> Any:
+    resp = await q.execute(mm, request, {"input": mutation_input})
+    payload: Args = resp.get(field) or {}
+    q.raise_payload_errors(payload.get("errors"), action)
+    return payload.get(result_key)
+
+
+@tool("get_insights",
+      "List Monarch's personalized insights (tips about spending, bills, and savings shown "
+      "in the app's feed). With no filters, returns current insights",
+      {"status": insight_enums("Only insights with these statuses", q.INSIGHT_LIFECYCLE_STATUSES),
+       "bookmarked": boolean("Only bookmarked (true) or unbookmarked (false) insights"),
+       "dismissed": boolean("Only dismissed (true) or non-dismissed (false) insights"),
+       "unhelpful": boolean("Only insights marked unhelpful (true) or not (false)"),
+       **INSIGHT_PAGE})
+async def get_insights(mm: MonarchMoney, args: Args) -> Any:
+    variables = pick(args, {"status": "statuses", "bookmarked": "bookmarked",
+                            "dismissed": "dismissed", "unhelpful": "unhelpful",
+                            "offset": "offset"})
+    variables["limit"] = args.get("limit", 50)
+    return (await q.execute(mm, q.GET_INSIGHTS, variables)).get("insights")
+
+
+@tool("get_insight", "Get one insight", INSIGHT_ID, ["insight_id"])
+async def get_insight(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_INSIGHT, {"id": args["insight_id"]})).get("insight")
+
+
+@tool("get_insight_counts",
+      "Count completed, bookmarked, dismissed, and unhelpful insights, and the total value "
+      "insights have surfaced")
+async def get_insight_counts(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_INSIGHT_COUNTS)
+
+
+@tool("update_insight_status",
+      "Change an insight's status, e.g. in_progress, completed, or denied (not interested; "
+      "undo with undo_insight_denial)",
+      {**INSIGHT_ID,
+       "status": string("New status", enum=q.INSIGHT_LIFECYCLE_STATUSES),
+       "denial_reason": string("Why the insight isn't useful (with status denied)"),
+       "allow_resurface": boolean("Let a denied insight come back later"),
+       "mute_subject": boolean("Stop showing insights about the same subject")},
+      ["insight_id", "status"], WRITE)
+async def update_insight_status(mm: MonarchMoney, args: Args) -> Any:
+    mutation_input = {"id": args["insight_id"], "status": args["status"],
+                      **pick(args, {"denial_reason": "denialReason",
+                                    "allow_resurface": "allowResurface",
+                                    "mute_subject": "muteSubject"})}
+    return await insight_mutation(mm, q.UPDATE_INSIGHT_STATUS, "updateInsightStatus",
+                                  mutation_input, "Insight status update", "insight")
+
+
+@tool("set_insight_bookmarked", "Bookmark or unbookmark an insight",
+      {**INSIGHT_ID, "bookmarked": boolean("true to bookmark, false to remove the bookmark")},
+      ["insight_id", "bookmarked"], WRITE)
+async def set_insight_bookmarked(mm: MonarchMoney, args: Args) -> Any:
+    return await insight_mutation(mm, q.SET_INSIGHT_BOOKMARKED, "setInsightBookmarked",
+                                  {"id": args["insight_id"], "bookmarked": args["bookmarked"]},
+                                  "Insight bookmark", "insight")
+
+
+@tool("set_insight_feedback",
+      "Rate an insight helpful (like) or unhelpful (dislike). Omit feedback to clear the rating",
+      {**INSIGHT_ID,
+       "feedback": string("Rating", enum=["like", "dislike"]),
+       "reason": string("Optional explanation")},
+      ["insight_id"], WRITE)
+async def set_insight_feedback(mm: MonarchMoney, args: Args) -> Any:
+    mutation_input = {"id": args["insight_id"], "feedback": args.get("feedback"),
+                      **pick(args, {"reason": "reason"})}
+    return await insight_mutation(mm, q.SET_INSIGHT_FEEDBACK, "setInsightFeedback",
+                                  mutation_input, "Insight feedback", "insight")
+
+
+@tool("dismiss_insight", "Dismiss an insight so it leaves the feed", INSIGHT_ID,
+      ["insight_id"], DESTRUCTIVE)
+async def dismiss_insight(mm: MonarchMoney, args: Args) -> Any:
+    return await insight_mutation(mm, q.SOFT_DELETE_INSIGHT, "softDeleteInsight",
+                                  {"id": args["insight_id"]}, "Insight dismissal", "deleted")
+
+
+@tool("undo_insight_denial", "Restore an insight that was marked denied (not interested)",
+      INSIGHT_ID, ["insight_id"], WRITE)
+async def undo_insight_denial(mm: MonarchMoney, args: Args) -> Any:
+    return await insight_mutation(mm, q.UNDO_INSIGHT_DENIAL, "undoInsightDenial",
+                                  {"id": args["insight_id"]}, "Insight denial undo", "insight")
+
+
+@tool("get_financial_insights",
+      "List savings opportunities Monarch found, such as cheaper plans, duplicate "
+      "subscriptions, or expired promotions, with estimated savings",
+      {"status": insight_enums("Only opportunities with these statuses",
+                           q.FINANCIAL_INSIGHT_STATUSES),
+       "opportunity_type": insight_enums("Only these kinds of opportunity", q.OPPORTUNITY_TYPES),
+       **INSIGHT_PAGE})
+async def get_financial_insights(mm: MonarchMoney, args: Args) -> Any:
+    variables = pick(args, {"status": "statuses", "opportunity_type": "opportunityTypes",
+                            "offset": "offset"})
+    variables["limit"] = args.get("limit", 50)
+    return (await q.execute(mm, q.GET_FINANCIAL_INSIGHTS, variables)).get("financialInsights")
+
+
+@tool("get_financial_insight",
+      "Get one savings opportunity with its suggested actions and step-by-step instructions",
+      {"financial_insight_id": string("Savings opportunity ID (see get_financial_insights)")},
+      ["financial_insight_id"])
+async def get_financial_insight(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_FINANCIAL_INSIGHT, {"id": args["financial_insight_id"]})
+    return resp.get("financialInsight")
+
+
+@tool("get_financial_insight_summary",
+      "Summarize savings opportunities (identified and captured savings, counts by status) "
+      "and the latest scan for new ones. Without dates, covers all time",
+      DATE_RANGE)
+async def get_financial_insight_summary(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    return await q.execute(mm, q.GET_FINANCIAL_INSIGHT_SUMMARY,
+                           {"startDate": start, "endDate": end})
+
+
+@tool("update_financial_insight_status",
+      "Change a savings opportunity's status, e.g. in_progress, completed, or denied",
+      {"financial_insight_id": string("Savings opportunity ID"),
+       "status": string("New status", enum=q.FINANCIAL_INSIGHT_STATUSES),
+       "execution_method": string("How you're acting on it: self_guided, or copilot "
+                                  "(Monarch's assistant helps)",
+                                  enum=["self_guided", "copilot"]),
+       "denial_reason": string("Why it isn't useful (with status denied)"),
+       "allow_resurface": boolean("Let a denied opportunity come back later")},
+      ["financial_insight_id", "status"], WRITE)
+async def update_financial_insight_status(mm: MonarchMoney, args: Args) -> Any:
+    mutation_input = {"id": args["financial_insight_id"], "status": args["status"],
+                      **pick(args, {"execution_method": "executionMethod",
+                                    "denial_reason": "denialReason",
+                                    "allow_resurface": "allowResurface"})}
+    return await insight_mutation(mm, q.UPDATE_FINANCIAL_INSIGHT_STATUS,
+                                  "updateFinancialInsightStatus", mutation_input,
+                                  "Savings opportunity status update", "financialInsight")
+
+
+# Monarch writes the weekly recap on first request; the web app polls like this.
+RECAP_POLL_INTERVAL = 2.0
+RECAP_POLL_ATTEMPTS = 15
+
+
+def last_recap_week(today: date) -> tuple[str, str]:
+    """The most recent finished Sunday-Saturday week, as the web app picks it."""
+    end = today - timedelta(days=(today.weekday() + 2) % 7 or 7)
+    return (end - timedelta(days=6)).isoformat(), end.isoformat()
+
+
+@tool("get_weekly_recap",
+      "Get Monarch's weekly recap: a written summary with cards on net worth, spending, and "
+      "recurring bills. Without dates, covers the last full Sunday-Saturday week. Monarch "
+      "may take a few seconds to write a new recap",
+      {"start_date": string("Week start (a Sunday) in YYYY-MM-DD format (requires end_date)"),
+       "end_date": string("Week end (a Saturday) in YYYY-MM-DD format (requires start_date)")})
+async def get_weekly_recap(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    if not (start and end):
+        start, end = last_recap_week(date.today())
+    for attempt in range(RECAP_POLL_ATTEMPTS):
+        if attempt:
+            await asyncio.sleep(RECAP_POLL_INTERVAL)
+        recap = (await q.execute(mm, q.GET_WEEKLY_RECAP,
+                                 {"startDate": start, "endDate": end})).get("recap")
+        if recap:
+            return recap
+    raise RuntimeError(f"The recap for {start} to {end} isn't ready yet. Try again shortly.")
+
+
+# --- Assets and restore -----------------------------------------------------
+
+SEARCH_LIMIT: Args = {"type": "integer", "minimum": 1,
+                      "description": "Maximum number of matches (default 5)"}
+
+
+@tool("search_property_values",
+      "Look up Zillow property matches and their Zestimates by address. Gives the zpid "
+      "for create_real_estate_account.",
+      {"address": string("Street address, e.g. '1 Main St, Springfield, IL'"),
+       "limit": SEARCH_LIMIT},
+      ["address"])
+async def search_property_values(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_ZESTIMATES,
+                           {"address": args["address"], "limit": args.get("limit", 5)})
+    return resp.get("zestimates")
+
+
+@tool("search_vehicle_values",
+      "Look up a vehicle and its estimated value by VIN. Gives the vin and name for "
+      "create_vehicle_account.",
+      {"vin": string("Vehicle identification number (17 characters)"),
+       "limit": SEARCH_LIMIT},
+      ["vin"])
+async def search_vehicle_values(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.SEARCH_VEHICLES,
+                           {"search": args["vin"], "limit": args.get("limit", 5)})
+    return resp.get("vehicles")
+
+
+@tool("get_deleted_accounts", "List deleted accounts that undelete_account can restore")
+async def get_deleted_accounts(mm: MonarchMoney, args: Args) -> Any:
+    accounts = (await q.execute(mm, q.GET_ACCOUNTS_INCLUDING_DELETED)).get("accounts") or []
+    return [a for a in accounts if a.get("deletedAt")]
+
+
+@tool("create_real_estate_account",
+      "Add a property whose value Monarch keeps updated from Zillow. Find the zpid with "
+      "search_property_values.",
+      {"zpid": string("Zillow property ID from search_property_values"),
+       "name": string("Account name"),
+       "subtype": string("Real estate subtype: primary_home, secondary_home or rental_property"),
+       "current_balance": number("Starting value (default 0; Zillow updates it)"),
+       "include_in_net_worth": boolean("Count this property toward net worth", True)},
+      ["zpid", "name", "subtype"], WRITE)
+async def create_real_estate_account(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.CREATE_REAL_ESTATE_ACCOUNT, {"input": {
+        "zpid": args["zpid"],
+        "name": args["name"],
+        "subtype": args["subtype"],
+        "currentBalance": args.get("current_balance", 0),
+        "includeInNetWorth": args.get("include_in_net_worth", True),
+    }})
+    payload = resp.get("createSyncedRealEstateAccount") or {}
+    q.raise_payload_errors(payload.get("errors"), "Creating the real estate account")
+    return payload.get("account")
+
+
+@tool("create_vehicle_account",
+      "Add a vehicle whose value Monarch keeps updated by VIN. Check the VIN with "
+      "search_vehicle_values.",
+      {"vin": string("Vehicle identification number"),
+       "name": string("Account name"),
+       "subtype": string("Vehicle subtype: car, boat, motorcycle, snowmobile, bicycle or other")},
+      ["vin", "name", "subtype"], WRITE)
+async def create_vehicle_account(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.CREATE_VEHICLE_ACCOUNT, {"input": {
+        "vin": args["vin"], "name": args["name"], "subtype": args["subtype"],
+    }})
+    payload = resp.get("createSyncedVehicleAccount") or {}
+    q.raise_payload_errors(payload.get("errors"), "Creating the vehicle account")
+    return payload.get("account")
+
+
+@tool("undelete_account", "Restore a deleted account (see get_deleted_accounts)",
+      {"account_id": string("ID of the deleted account")}, ["account_id"], WRITE)
+async def undelete_account(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.UNDELETE_ACCOUNT, {"input": {"id": args["account_id"]}})
+    payload = resp.get("undeleteAccount") or {}
+    q.raise_payload_errors(payload.get("errors"), "Restoring the account")
+    return {"account_id": args["account_id"], "undeleted": payload.get("undeleted")}
 
 
 # --- Other ------------------------------------------------------------------

@@ -133,7 +133,7 @@
     },
     {
       "name": "delete_account",
-      "description": "Permanently delete an account and its transactions."
+      "description": "Delete an account and its transactions (undelete_account can restore it)."
     },
     {
       "name": "upload_account_balance_history",
@@ -354,6 +354,286 @@
     {
       "name": "delete_merchant",
       "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
+    },
+    {
+      "name": "get_portfolio",
+      "description": "Get investment performance (total value, returns, benchmarks) and holdings grouped by security across all investment accounts, or only the given ones."
+    },
+    {
+      "name": "search_securities",
+      "description": "Search stocks, funds, and other securities by ticker or name (IDs for create_manual_holding)."
+    },
+    {
+      "name": "get_security",
+      "description": "Get details and current price for one security."
+    },
+    {
+      "name": "get_security_performance",
+      "description": "Get daily return history for one or more securities."
+    },
+    {
+      "name": "get_security_types",
+      "description": "List security types (values for update_holding's security_type)."
+    },
+    {
+      "name": "get_allocation_categories",
+      "description": "List asset allocation categories (slugs for set_holding_classification and set_security_classification)."
+    },
+    {
+      "name": "create_manual_holding",
+      "description": "Add a holding to a manually tracked investment account."
+    },
+    {
+      "name": "update_holding",
+      "description": "Change a holding's quantity, cost basis, or security type."
+    },
+    {
+      "name": "delete_holding",
+      "description": "Delete a holding from a manually tracked investment account."
+    },
+    {
+      "name": "create_manual_investments_account",
+      "description": "Create a manually tracked investment account, tracked by holdings or by balance."
+    },
+    {
+      "name": "set_holding_classification",
+      "description": "Set the asset allocation category for one holding, overriding its security's category."
+    },
+    {
+      "name": "set_security_classification",
+      "description": "Set the asset allocation category for a security, for every holding of it."
+    },
+    {
+      "name": "clear_holding_classification",
+      "description": "Remove a holding's own allocation category, so it uses its security's again."
+    },
+    {
+      "name": "clear_security_classification",
+      "description": "Remove your allocation category for a security, going back to Monarch's default."
+    },
+    {
+      "name": "get_budget_settings",
+      "description": "Get the budget system (fixed_and_flex or groups_and_categories), whether budget edits apply to future months by default, the flex rollover period, and whether a budget exists."
+    },
+    {
+      "name": "move_budget_money",
+      "description": "Move budgeted money from one category, category group, or the flex bucket to another for one month, like the web app's Move Money."
+    },
+    {
+      "name": "set_flex_budget_amount",
+      "description": "Set the monthly flex bucket budget (fixed_and_flex budgets)."
+    },
+    {
+      "name": "update_budget_settings",
+      "description": "Change budget settings: whether budget edits apply to future months by default, and flex bucket rollover."
+    },
+    {
+      "name": "reset_budget_rollover",
+      "description": "Restart rollover for a category or category group from a given month, discarding the rollover balance accumulated before it."
+    },
+    {
+      "name": "get_cash_flow_projection",
+      "description": "Project an account's daily balance from upcoming recurring transactions: lowest balance, overdraft dates, and safe-to-spend."
+    },
+    {
+      "name": "get_forecast_scenarios",
+      "description": "List long-term forecast scenarios with headline results (net worth today, at retirement, and at the end of the forecast)."
+    },
+    {
+      "name": "get_forecast_scenario",
+      "description": "Get a forecast scenario's settings, accounts, people, life events, and priority rules."
+    },
+    {
+      "name": "create_forecast_scenario",
+      "description": "Create a forecast scenario, starting from the household's current accounts and settings."
+    },
+    {
+      "name": "update_forecast_scenario",
+      "description": "Change a forecast scenario's name, style, or settings."
+    },
+    {
+      "name": "duplicate_forecast_scenario",
+      "description": "Copy a forecast scenario, including its events and rules."
+    },
+    {
+      "name": "delete_forecast_scenario",
+      "description": "Permanently delete a forecast scenario."
+    },
+    {
+      "name": "get_debt_accounts",
+      "description": "List debt accounts (credit cards and loans) with APR, minimum and planned payments."
+    },
+    {
+      "name": "get_debt_paydown_plan",
+      "description": "Project when debts will be paid off and the interest paid, optionally with extra payments."
+    },
+    {
+      "name": "get_debt_paydown_budget_amounts",
+      "description": "Get the budgeted and actual debt payments per account for a range of months."
+    },
+    {
+      "name": "set_debt_paydown_budget_amount",
+      "description": "Set how much to budget for paying down a debt account in a month."
+    },
+    {
+      "name": "get_paychecks",
+      "description": "List recorded paychecks with deductions and linked deposits."
+    },
+    {
+      "name": "get_paycheck",
+      "description": "Get one paycheck with its deductions and linked deposits."
+    },
+    {
+      "name": "get_paychecks_summary",
+      "description": "Total gross pay, deductions, and net pay, with deductions broken down by type."
+    },
+    {
+      "name": "get_paycheck_employers",
+      "description": "List employers that paychecks are recorded for."
+    },
+    {
+      "name": "create_paycheck",
+      "description": "Record a paycheck."
+    },
+    {
+      "name": "update_paycheck",
+      "description": "Change a recorded paycheck."
+    },
+    {
+      "name": "delete_paycheck",
+      "description": "Delete a recorded paycheck."
+    },
+    {
+      "name": "create_paycheck_employer",
+      "description": "Add an employer to record paychecks for."
+    },
+    {
+      "name": "update_paycheck_employer",
+      "description": "Rename a paycheck employer."
+    },
+    {
+      "name": "delete_paycheck_employer",
+      "description": "Delete a paycheck employer."
+    },
+    {
+      "name": "get_business_entities",
+      "description": "List the household's businesses, with their linked accounts and transaction counts."
+    },
+    {
+      "name": "get_business_entity",
+      "description": "Get one business."
+    },
+    {
+      "name": "get_business_entity_financials",
+      "description": "Income, expenses, and net assets per business for a date range, with monthly breakdowns."
+    },
+    {
+      "name": "get_business_entity_summaries",
+      "description": "Transaction totals per business for a date range (income, expenses, savings)."
+    },
+    {
+      "name": "create_business_entity",
+      "description": "Create a business, to track its accounts and transactions separately."
+    },
+    {
+      "name": "update_business_entity",
+      "description": "Update a business's details."
+    },
+    {
+      "name": "delete_business_entity",
+      "description": "Delete a business."
+    },
+    {
+      "name": "set_account_business_entity",
+      "description": "Assign accounts to a business, or leave business_entity_id out to unassign them."
+    },
+    {
+      "name": "get_schedule_c_line_items",
+      "description": "List the IRS Schedule C line items Monarch can map categories to."
+    },
+    {
+      "name": "get_schedule_c_category_mappings",
+      "description": "List which categories map to which Schedule C lines."
+    },
+    {
+      "name": "set_schedule_c_category_mapping",
+      "description": "Map a category to a Schedule C line for a tax year (replaces its existing mapping)."
+    },
+    {
+      "name": "delete_schedule_c_category_mapping",
+      "description": "Remove a category's Schedule C mapping for a tax year."
+    },
+    {
+      "name": "get_report",
+      "description": "Totals for transactions matching the filters, optionally grouped by category, merchant, etc."
+    },
+    {
+      "name": "get_report_configurations",
+      "description": "List saved reports (filters and chart settings)."
+    },
+    {
+      "name": "create_report_configuration",
+      "description": "Save a report with these filters and chart settings so it shows up in the web app."
+    },
+    {
+      "name": "update_report_configuration",
+      "description": "Rename a saved report (Monarch only allows changing the name)."
+    },
+    {
+      "name": "delete_report_configuration",
+      "description": "Delete a saved report (transactions are not affected)."
+    },
+    {
+      "name": "get_insights",
+      "description": "List Monarch's personalized insights (tips about spending, bills, and savings shown in the app's feed)."
+    },
+    {
+      "name": "get_insight",
+      "description": "Get one insight."
+    },
+    {
+      "name": "get_insight_counts",
+      "description": "Count completed, bookmarked, dismissed, and unhelpful insights, and the total value insights have surfaced."
+    },
+    {
+      "name": "update_insight_status",
+      "description": "Change an insight's status, e.g."
+    },
+    {
+      "name": "set_insight_bookmarked",
+      "description": "Bookmark or unbookmark an insight."
+    },
+    {
+      "name": "set_insight_feedback",
+      "description": "Rate an insight helpful (like) or unhelpful (dislike)."
+    },
+    {
+      "name": "dismiss_insight",
+      "description": "Dismiss an insight so it leaves the feed."
+    },
+    {
+      "name": "undo_insight_denial",
+      "description": "Restore an insight that was marked denied (not interested)."
+    },
+    {
+      "name": "get_financial_insights",
+      "description": "List savings opportunities Monarch found, such as cheaper plans, duplicate subscriptions, or expired promotions, with estimated savings."
+    },
+    {
+      "name": "get_financial_insight",
+      "description": "Get one savings opportunity with its suggested actions and step-by-step instructions."
+    },
+    {
+      "name": "get_financial_insight_summary",
+      "description": "Summarize savings opportunities (identified and captured savings, counts by status) and the latest scan for new ones."
+    },
+    {
+      "name": "update_financial_insight_status",
+      "description": "Change a savings opportunity's status, e.g."
+    },
+    {
+      "name": "get_weekly_recap",
+      "description": "Get Monarch's weekly recap: a written summary with cards on net worth, spending, and recurring bills."
     },
     {
       "name": "search_property_values",
