@@ -1178,6 +1178,89 @@ async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
             "success": (resp.get("deleteMerchant") or {}).get("success")}
 
 
+# --- Assets and restore -----------------------------------------------------
+
+SEARCH_LIMIT: Args = {"type": "integer", "minimum": 1,
+                      "description": "Maximum number of matches (default 5)"}
+
+
+@tool("search_property_values",
+      "Look up Zillow property matches and their Zestimates by address. Gives the zpid "
+      "for create_real_estate_account.",
+      {"address": string("Street address, e.g. '1 Main St, Springfield, IL'"),
+       "limit": SEARCH_LIMIT},
+      ["address"])
+async def search_property_values(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_ZESTIMATES,
+                           {"address": args["address"], "limit": args.get("limit", 5)})
+    return resp.get("zestimates")
+
+
+@tool("search_vehicle_values",
+      "Look up a vehicle and its estimated value by VIN. Gives the vin and name for "
+      "create_vehicle_account.",
+      {"vin": string("Vehicle identification number (17 characters)"),
+       "limit": SEARCH_LIMIT},
+      ["vin"])
+async def search_vehicle_values(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.SEARCH_VEHICLES,
+                           {"search": args["vin"], "limit": args.get("limit", 5)})
+    return resp.get("vehicles")
+
+
+@tool("get_deleted_accounts", "List deleted accounts that undelete_account can restore")
+async def get_deleted_accounts(mm: MonarchMoney, args: Args) -> Any:
+    accounts = (await q.execute(mm, q.GET_ACCOUNTS_INCLUDING_DELETED)).get("accounts") or []
+    return [a for a in accounts if a.get("deletedAt")]
+
+
+@tool("create_real_estate_account",
+      "Add a property whose value Monarch keeps updated from Zillow. Find the zpid with "
+      "search_property_values.",
+      {"zpid": string("Zillow property ID from search_property_values"),
+       "name": string("Account name"),
+       "subtype": string("Real estate subtype: primary_home, secondary_home or rental_property"),
+       "current_balance": number("Starting value (default 0; Zillow updates it)"),
+       "include_in_net_worth": boolean("Count this property toward net worth", True)},
+      ["zpid", "name", "subtype"], WRITE)
+async def create_real_estate_account(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.CREATE_REAL_ESTATE_ACCOUNT, {"input": {
+        "zpid": args["zpid"],
+        "name": args["name"],
+        "subtype": args["subtype"],
+        "currentBalance": args.get("current_balance", 0),
+        "includeInNetWorth": args.get("include_in_net_worth", True),
+    }})
+    payload = resp.get("createSyncedRealEstateAccount") or {}
+    q.raise_payload_errors(payload.get("errors"), "Creating the real estate account")
+    return payload.get("account")
+
+
+@tool("create_vehicle_account",
+      "Add a vehicle whose value Monarch keeps updated by VIN. Check the VIN with "
+      "search_vehicle_values.",
+      {"vin": string("Vehicle identification number"),
+       "name": string("Account name"),
+       "subtype": string("Vehicle subtype: car, boat, motorcycle, snowmobile, bicycle or other")},
+      ["vin", "name", "subtype"], WRITE)
+async def create_vehicle_account(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.CREATE_VEHICLE_ACCOUNT, {"input": {
+        "vin": args["vin"], "name": args["name"], "subtype": args["subtype"],
+    }})
+    payload = resp.get("createSyncedVehicleAccount") or {}
+    q.raise_payload_errors(payload.get("errors"), "Creating the vehicle account")
+    return payload.get("account")
+
+
+@tool("undelete_account", "Restore a deleted account (see get_deleted_accounts)",
+      {"account_id": string("ID of the deleted account")}, ["account_id"], WRITE)
+async def undelete_account(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.UNDELETE_ACCOUNT, {"input": {"id": args["account_id"]}})
+    payload = resp.get("undeleteAccount") or {}
+    q.raise_payload_errors(payload.get("errors"), "Restoring the account")
+    return {"account_id": args["account_id"], "undeleted": payload.get("undeleted")}
+
+
 # --- Other ------------------------------------------------------------------
 
 @tool("get_household_members", "List household members (IDs for owner_user_id)")
