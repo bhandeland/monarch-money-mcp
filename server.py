@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from gql import GraphQLRequest
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
-from mcp.server.models import InitializationOptions
-from mcp.types import ServerCapabilities, Tool, TextContent, ToolAnnotations
+from mcp.types import (CallToolRequestParams, CallToolResult, ListToolsResult,
+                       PaginatedRequestParams, TextContent, Tool, ToolAnnotations)
 from monarchmoney import MonarchMoney
 from monarchmoney.monarchmoney import BalanceHistoryRow
 
@@ -93,12 +93,13 @@ def pick(arguments: Args, mapping: dict[str, str]) -> Args:
     return {api: arguments[arg] for arg, api in mapping.items() if arg in arguments}
 
 
-def result(data: Any) -> list[TextContent]:
-    return [TextContent(type="text", text=json.dumps(convert_dates_to_strings(data), indent=2))]
+def result(data: Any) -> CallToolResult:
+    text = json.dumps(convert_dates_to_strings(data), indent=2)
+    return CallToolResult(content=[TextContent(type="text", text=text)])
 
 
-# Initialize the MCP server
-server: Server[Any] = Server("monarch-money")
+def error(message: str) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=message)], is_error=True)
 
 # Set by serve() once authenticated; replaced when the token has to be renewed.
 mm_client: MonarchMoney | None = None
@@ -112,9 +113,9 @@ authenticator = auth.Authenticator(os.environ)
 Handler = Callable[[MonarchMoney, Args], Awaitable[Any]]
 TOOLS: dict[str, tuple[Tool, Handler]] = {}
 
-READ = ToolAnnotations(readOnlyHint=True)
-WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
-DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+READ = ToolAnnotations(read_only_hint=True)
+WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False)
+DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
 
 def tool(name: str, description: str, properties: Args | None = None,
@@ -129,7 +130,7 @@ def tool(name: str, description: str, properties: Args | None = None,
         schema["required"] = required
 
     def register(fn: Handler) -> Handler:
-        TOOLS[name] = (Tool(name=name, description=description, inputSchema=schema,
+        TOOLS[name] = (Tool(name=name, description=description, input_schema=schema,
                             annotations=annotations), fn)
         return fn
     return register
@@ -1204,19 +1205,17 @@ async def get_subscription_details(mm: MonarchMoney, args: Args) -> Any:
 
 # ---------------------------------------------------------------------------
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
+def list_tools() -> list[Tool]:
     """List all available tools."""
     return [t for t, _ in TOOLS.values()]
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: Args) -> list[TextContent]:
+async def call_tool(name: str, arguments: Args | None) -> CallToolResult:
     """Execute a tool and return the results."""
     if not mm_client:
-        return [TextContent(type="text", text="Error: MonarchMoney client not initialized")]
+        return error("Error: MonarchMoney client not initialized")
     if name not in TOOLS:
-        return [TextContent(type="text", text=f"Error: Unknown tool '{name}'")]
+        return error(f"Error: Unknown tool '{name}'")
 
     handler = TOOLS[name][1]
     try:
@@ -1228,7 +1227,21 @@ async def call_tool(name: str, arguments: Args) -> list[TextContent]:
             # The token stopped working; log in again and retry once.
             return result(await handler(await renew_client(mm_client), arguments or {}))
     except Exception as e:
-        return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
+        return error(f"Error executing {name}: {str(e)}")
+
+
+async def on_list_tools(ctx: ServerRequestContext[Any],
+                        params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=list_tools())
+
+
+async def on_call_tool(ctx: ServerRequestContext[Any],
+                       params: CallToolRequestParams) -> CallToolResult:
+    return await call_tool(params.name, params.arguments)
+
+
+server: Server[Any] = Server("monarch-money", version="1.0.0",
+                             on_list_tools=on_list_tools, on_call_tool=on_call_tool)
 
 
 async def renew_client(stale: MonarchMoney) -> MonarchMoney:
@@ -1247,15 +1260,7 @@ async def serve() -> None:
         return
 
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            InitializationOptions(
-                server_name="monarch-money",
-                server_version="1.0.0",
-                capabilities=ServerCapabilities(tools={}),
-            ),
-        )
+        await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
 async def login() -> None:

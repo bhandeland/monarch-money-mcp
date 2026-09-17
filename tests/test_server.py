@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from gql.transport.exceptions import TransportServerError
+from mcp import Client
 from mcp.types import TextContent
 from monarchmoney import MonarchMoney
 
@@ -15,7 +16,8 @@ from tests.helpers import Call, ToolError
 
 
 async def test_list_tools_matches_registry() -> None:
-    tools = await server.list_tools()
+    async with Client(server.server) as client:
+        tools = (await client.list_tools()).tools
     assert [t.name for t in tools] == list(server.TOOLS)
     assert len(tools) == 70
 
@@ -23,7 +25,7 @@ async def test_list_tools_matches_registry() -> None:
 @pytest.mark.parametrize("name", sorted(server.TOOLS))
 def test_tool_schema_is_well_formed(name: str) -> None:
     tool, _ = server.TOOLS[name]
-    schema: dict[str, Any] = tool.inputSchema
+    schema: dict[str, Any] = tool.input_schema
     assert tool.description
     assert schema["type"] == "object" and schema["additionalProperties"] is False
     assert set(schema.get("required", [])) <= set(schema["properties"])
@@ -36,15 +38,16 @@ def test_tool_annotations_match_name(name: str) -> None:
     annotations = server.TOOLS[name][0].annotations
     assert annotations is not None
     reads = name.startswith(("get_", "list_", "preview_", "search_"))
-    assert annotations.readOnlyHint is reads
+    assert annotations.read_only_hint is reads
     if name.startswith("delete_"):
-        assert annotations.destructiveHint is True
+        assert annotations.destructive_hint is True
 
 
 async def test_call_tool_without_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "mm_client", None)
-    [content] = await server.call_tool("get_accounts", {})
-    assert isinstance(content, TextContent)
+    result = await server.call_tool("get_accounts", {})
+    [content] = result.content
+    assert isinstance(content, TextContent) and result.is_error
     assert content.text == "Error: MonarchMoney client not initialized"
 
 
@@ -67,8 +70,9 @@ async def test_call_tool_serializes_dates(call: Call, mm: AsyncMock) -> None:
 
 async def test_call_tool_accepts_none_arguments(mm: AsyncMock) -> None:
     mm.get_accounts.return_value = []
-    [content] = await server.call_tool("get_accounts", None)  # type: ignore[arg-type]
-    assert isinstance(content, TextContent)
+    result = await server.call_tool("get_accounts", None)
+    [content] = result.content
+    assert isinstance(content, TextContent) and not result.is_error
     assert content.text == "[]"
 
 

@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp import Client
 from mcp.types import TextContent
 from monarchmoney import MonarchMoney
 
@@ -34,9 +35,11 @@ def call(mm: AsyncMock) -> Call:
     """
     async def run(tool: str, /, **arguments: Any) -> Any:
         CALLED_TOOLS.add(tool)
-        [content] = await server.call_tool(tool, arguments)
+        async with Client(server.server) as client:
+            result = await client.call_tool(tool, arguments)
+        [content] = result.content
         assert isinstance(content, TextContent)
-        if content.text.startswith("Error"):
+        if result.is_error:
             raise ToolError(content.text)
         return json.loads(content.text)
     return run
