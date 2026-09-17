@@ -1846,6 +1846,183 @@ async def clear_security_classification(mm: MonarchMoney, args: Args) -> Any:
     return await investment_mutation(mm, q.CLEAR_SECURITY_CLASSIFICATION,
                                      {"securityId": args["security_id"]},
                                      "clearSecurityClassification", "Security classification reset")
+# --- Business and Schedule C ------------------------------------------------
+
+BUSINESS_ENTITY_FIELDS: Args = {
+    "name": string("Business name"),
+    "description": string("Short description"),
+    "notes": string("Notes"),
+    "color": string("Color, as a hex code like #3A7BD5"),
+    "structure": string("Legal structure", enum=q.BUSINESS_ENTITY_STRUCTURES),
+}
+BUSINESS_ENTITY_FIELD_NAMES = {k: k for k in BUSINESS_ENTITY_FIELDS}
+TAX_YEAR: Args = {"type": "integer", "description": "Tax year (default: this year)"}
+
+
+def required_date_range(args: Args) -> tuple[str, str]:
+    start, end = date_range(args)
+    if not start or not end:
+        raise ValueError("Provide both start_date and end_date.")
+    return start, end
+
+
+def tax_year(args: Args) -> int:
+    year: int = args.get("tax_year") or date.today().year
+    return year
+
+
+@tool("get_business_entities",
+      "List the household's businesses, with their linked accounts and transaction counts")
+async def get_business_entities(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_BUSINESS_ENTITIES)).get("businessEntities")
+
+
+@tool("get_business_entity", "Get one business",
+      {"business_entity_id": string("Business ID (see get_business_entities)")},
+      ["business_entity_id"])
+async def get_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    entity_id = args["business_entity_id"]
+    entity = (await q.execute(mm, q.GET_BUSINESS_ENTITY, {"id": entity_id})).get("businessEntity")
+    if entity is None:
+        raise ValueError(f"No business entity with ID {entity_id}")
+    return entity
+
+
+@tool("get_business_entity_financials",
+      "Income, expenses, and net assets per business for a date range, with monthly breakdowns",
+      {"business_entity_ids": id_list("Businesses to include (default: all)"),
+       "start_date": string("Start date in YYYY-MM-DD format"),
+       "end_date": string("End date in YYYY-MM-DD format")},
+      ["start_date", "end_date"])
+async def get_business_entity_financials(mm: MonarchMoney, args: Args) -> Any:
+    start, end = required_date_range(args)
+    ids: list[str] = args.get("business_entity_ids") or []
+    if not ids:
+        entities: list[Args] = (await q.execute(mm, q.GET_BUSINESS_ENTITIES_SUMMARY)).get("businessEntities") or []
+        ids = [e["id"] for e in entities]
+    if not ids:
+        return []
+    resp = await q.execute(mm, q.GET_BUSINESS_ENTITY_FINANCIALS,
+                           {"entityIds": ids, "startDate": start, "endDate": end})
+    return resp.get("businessEntityFinancials")
+
+
+@tool("get_business_entity_summaries",
+      "Transaction totals per business for a date range (income, expenses, savings). "
+      "by_category adds a per-business, per-category breakdown, useful for Schedule C.",
+      {"start_date": string("Start date in YYYY-MM-DD format"),
+       "end_date": string("End date in YYYY-MM-DD format"),
+       "business_entity_ids": id_list("Only these businesses (default: all)"),
+       "include_unassigned": boolean("With business_entity_ids, also include transactions "
+                                     "not assigned to any business"),
+       "by_category": boolean("Also break totals down by category", default=False)},
+      ["start_date", "end_date"])
+async def get_business_entity_summaries(mm: MonarchMoney, args: Args) -> Any:
+    start, end = required_date_range(args)
+    filters: Args = {"startDate": start, "endDate": end}
+    if args.get("business_entity_ids"):
+        filters["businessEntitySet"] = {"businessEntityIds": args["business_entity_ids"],
+                                        "includeUnassigned": bool(args.get("include_unassigned"))}
+    request = (q.GET_BUSINESS_ENTITY_REPORT_BY_CATEGORY if args.get("by_category")
+               else q.GET_BUSINESS_ENTITY_SUMMARIES)
+    return await q.execute(mm, request, {"filters": filters})
+
+
+async def upsert_business_entity(mm: MonarchMoney, entity: Args) -> Any:
+    resp = await q.execute(mm, q.UPSERT_BUSINESS_ENTITY, {"input": entity})
+    payload = resp.get("upsertBusinessEntity") or {}
+    q.raise_payload_errors(payload.get("errors"), "Business entity save")
+    return payload.get("businessEntity")
+
+
+@tool("create_business_entity",
+      "Create a business, to track its accounts and transactions separately",
+      BUSINESS_ENTITY_FIELDS, ["name"], WRITE)
+async def create_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    return await upsert_business_entity(mm, pick(args, BUSINESS_ENTITY_FIELD_NAMES))
+
+
+@tool("update_business_entity", "Update a business's details",
+      {"business_entity_id": string("Business ID (see get_business_entities)"),
+       **BUSINESS_ENTITY_FIELDS},
+      ["business_entity_id"], WRITE)
+async def update_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    changes = pick(args, BUSINESS_ENTITY_FIELD_NAMES)
+    if not changes:
+        raise ValueError("Nothing to update: give at least one field to change")
+    return await upsert_business_entity(mm, {"id": args["business_entity_id"], **changes})
+
+
+@tool("delete_business_entity",
+      "Delete a business. Its accounts and transactions stay, but are no longer assigned to it.",
+      {"business_entity_id": string("Business ID")}, ["business_entity_id"], DESTRUCTIVE)
+async def delete_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    entity_id = args["business_entity_id"]
+    resp = await q.execute(mm, q.DELETE_BUSINESS_ENTITY, {"id": entity_id})
+    payload = resp.get("deleteBusinessEntity") or {}
+    q.raise_payload_errors(payload.get("errors"), "Business entity deletion")
+    return {"business_entity_id": entity_id, "deleted": payload.get("deleted")}
+
+
+@tool("set_account_business_entity",
+      "Assign accounts to a business, or leave business_entity_id out to unassign them. "
+      "To assign transactions, use update_transaction or bulk_update_transactions.",
+      {"account_ids": id_list("Accounts to change"),
+       "business_entity_id": string("Business to assign them to (omit to unassign)")},
+      ["account_ids"], WRITE)
+async def set_account_business_entity(mm: MonarchMoney, args: Args) -> Any:
+    entity_id = args.get("business_entity_id") or None
+    updates = [{"id": account_id, "businessEntityId": entity_id} for account_id in args["account_ids"]]
+    resp = await q.execute(mm, q.UPDATE_ACCOUNTS_BUSINESS_ENTITY, {"input": updates})
+    payload = resp.get("updateAccounts") or {}
+    q.raise_payload_errors(payload.get("errors"), "Account business assignment")
+    return payload.get("accounts")
+
+
+@tool("get_schedule_c_line_items", "List the IRS Schedule C line items Monarch can map categories to",
+      {"tax_year": TAX_YEAR})
+async def get_schedule_c_line_items(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_SCHEDULE_C_LINE_ITEMS, {"taxYear": tax_year(args)})
+    return resp.get("scheduleCLineItems")
+
+
+@tool("get_schedule_c_category_mappings", "List which categories map to which Schedule C lines",
+      {"tax_year": TAX_YEAR})
+async def get_schedule_c_category_mappings(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_TAX_SCHEDULE_CATEGORY_MAPPINGS,
+                           {"schedule": "schedule_c", "taxYear": tax_year(args)})
+    return resp.get("taxScheduleCategoryMappings")
+
+
+@tool("set_schedule_c_category_mapping",
+      "Map a category to a Schedule C line for a tax year (replaces its existing mapping)",
+      {"category_id": string("Category ID"),
+       "line_item": string("Schedule C line (see get_schedule_c_line_items)",
+                           enum=q.SCHEDULE_C_LINE_ITEMS),
+       "tax_year": TAX_YEAR},
+      ["category_id", "line_item"], WRITE)
+async def set_schedule_c_category_mapping(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.ASSIGN_TAX_SCHEDULE_CATEGORY_MAPPING, {"input": {
+        "categoryId": args["category_id"],
+        "lineItem": args["line_item"],
+        "schedule": "schedule_c",
+        "taxYear": tax_year(args),
+    }})
+    payload = resp.get("assignTaxScheduleCategoryMapping") or {}
+    q.raise_payload_errors(payload.get("errors"), "Schedule C mapping")
+    return payload.get("taxScheduleCategoryMapping")
+
+
+@tool("delete_schedule_c_category_mapping", "Remove a category's Schedule C mapping for a tax year",
+      {"category_id": string("Category ID"), "tax_year": TAX_YEAR},
+      ["category_id"], DESTRUCTIVE)
+async def delete_schedule_c_category_mapping(mm: MonarchMoney, args: Args) -> Any:
+    year = tax_year(args)
+    resp = await q.execute(mm, q.DELETE_TAX_SCHEDULE_CATEGORY_MAPPING, {"input": {
+        "categoryId": args["category_id"], "schedule": "schedule_c", "taxYear": year}})
+    payload = resp.get("deleteTaxScheduleCategoryMapping") or {}
+    q.raise_payload_errors(payload.get("errors"), "Schedule C mapping deletion")
+    return {"category_id": args["category_id"], "tax_year": year, "deleted": payload.get("deleted")}
 
 
 # --- Other ------------------------------------------------------------------
