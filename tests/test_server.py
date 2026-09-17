@@ -144,7 +144,7 @@ def test_main_dispatch(monkeypatch: pytest.MonkeyPatch, argv: list[str], expecte
     async def fake_serve() -> None:
         ran.append("serve")
 
-    async def fake_login() -> None:
+    async def fake_login(cookies: bool) -> None:
         ran.append("login")
 
     monkeypatch.setattr(server, "serve", fake_serve)
@@ -172,7 +172,7 @@ def test_main_install_needs_a_target() -> None:
 
 
 def test_main_login_failure_exits(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def failing_login() -> None:
+    async def failing_login(cookies: bool) -> None:
         raise auth.AuthError("bad password")
 
     monkeypatch.setattr(server, "login", failing_login)
@@ -182,16 +182,40 @@ def test_main_login_failure_exits(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def test_login_saves_and_cleans_up(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
                                          capsys: pytest.CaptureFixture[str]) -> None:
-    async def fake_interactive_login(env: object, prompt: object, secret: object) -> Path:
+    async def fake_interactive_login(env: object, prompt: object, secret: object,
+                                     notify: object) -> Path:
         return tmp_path / "session.json"
 
     monkeypatch.setattr(auth, "interactive_login", fake_interactive_login)
     monkeypatch.setattr(auth, "remove_legacy_sessions", lambda: [tmp_path / "old.pickle"])
-    await server.login()
+    await server.login(cookies=False)
     assert capsys.readouterr().out.splitlines() == [
         f"Saved session to {tmp_path / 'session.json'}",
         f"Removed old session file {tmp_path / 'old.pickle'}",
     ]
+
+
+def test_main_login_cookies_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[bool] = []
+
+    async def fake_login(cookies: bool) -> None:
+        calls.append(cookies)
+
+    monkeypatch.setattr(server, "login", fake_login)
+    server.main(["login"])
+    server.main(["login", "--cookies"])
+    assert calls == [False, True]
+
+
+async def test_login_with_cookies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                  capsys: pytest.CaptureFixture[str]) -> None:
+    async def fake_cookie_login(env: object, secret: object) -> Path:
+        return tmp_path / "session.json"
+
+    monkeypatch.setattr(auth, "cookie_login", fake_cookie_login)
+    monkeypatch.setattr(auth, "remove_legacy_sessions", lambda: [])
+    await server.login(cookies=True)
+    assert capsys.readouterr().out.splitlines() == [f"Saved session to {tmp_path / 'session.json'}"]
 
 
 def test_logout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,

@@ -1264,8 +1264,12 @@ async def serve() -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-async def login() -> None:
-    path = await auth.interactive_login(auth.configured_env(os.environ), input, getpass.getpass)
+async def login(cookies: bool) -> None:
+    env = auth.configured_env(os.environ)
+    if cookies:
+        path = await auth.cookie_login(env, getpass.getpass)
+    else:
+        path = await auth.interactive_login(env, input, getpass.getpass, print)
     print(f"Saved session to {path}")
     for legacy in auth.remove_legacy_sessions():
         print(f"Removed old session file {legacy}")
@@ -1284,7 +1288,10 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="monarch-money-mcp")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("serve", help="Run the MCP server over stdio (default)")
-    commands.add_parser("login", help="Log in once and save only the session token")
+    login_parser = commands.add_parser("login", help="Log in once and save only the session token")
+    login_parser.add_argument("--cookies", action="store_true",
+                              help="Log in with a Cookie header copied from your browser "
+                                   "(for when Monarch asks for a CAPTCHA)")
     commands.add_parser("logout", help="Delete the saved session token")
     install_parser = commands.add_parser(
         "install", help="Add the server to an MCP client, or print its config")
@@ -1297,7 +1304,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "login":
         try:
-            asyncio.run(login())
+            asyncio.run(login(args.cookies))
         except Exception as e:
             sys.exit(f"Login failed: {e}")
     elif command == "logout":

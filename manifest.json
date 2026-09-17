@@ -5,7 +5,7 @@
   "display_name": "Monarch Money",
   "version": "0.1.0",
   "description": "Accounts, transactions, budgets, goals, merchants, rules, and more from Monarch Money.",
-  "long_description": "An unofficial MCP server for Monarch Money. It reads and edits your accounts, transactions, categories, budgets, recurring bills, savings goals, merchants, and rules.\n\nSign-in: every setting is optional. If you leave them all blank, the extension uses the session token saved by running `monarch-money-mcp login` once in a terminal (see the README). If you fill in your email and password (and MFA secret, if your account uses 2FA), the extension logs in by itself and logs in again when the token expires. Those values are stored in your system keychain.",
+  "long_description": "An unofficial MCP server for Monarch Money. It reads and edits your accounts, transactions, categories, budgets, recurring bills, savings goals, merchants, and rules.\n\nSign-in: every setting is optional. If you leave them all blank, the extension uses the session token saved by running `monarch-money-mcp login` once in a terminal (see the README). If you fill in your email and password (and MFA secret, if your account uses 2FA), the extension logs in by itself and logs in again when the token expires. Those values are stored in your system keychain. If Monarch asks for a CAPTCHA, run `monarch-money-mcp login --cookies` instead, or paste your browser's Cookie header into the Browser cookies setting.\n",
   "author": {
     "name": "bhandeland",
     "url": "https://github.com/bhandeland"
@@ -39,6 +39,7 @@
         "MONARCH_EMAIL": "${user_config.monarch_email}",
         "MONARCH_PASSWORD": "${user_config.monarch_password}",
         "MONARCH_MFA_SECRET": "${user_config.monarch_mfa_secret}",
+        "MONARCH_COOKIES": "${user_config.monarch_cookies}",
         "MONARCH_SESSION_FILE": "${user_config.session_file}"
       }
     }
@@ -72,6 +73,13 @@
       "type": "string",
       "title": "MFA secret",
       "description": "Optional. The 2FA setup key (from \"Can't scan?\" when turning on 2FA), not a 6-digit code. Only needed for automatic login on accounts with 2FA. Treat it like a password.",
+      "required": false,
+      "sensitive": true
+    },
+    "monarch_cookies": {
+      "type": "string",
+      "title": "Browser cookies",
+      "description": "Optional. For when Monarch blocks password login with a CAPTCHA. The Cookie request header from a signed-in app.monarch.com tab (it must include session_id and csrftoken). Stored in your system keychain. Replace it when it stops working.",
       "required": false,
       "sensitive": true
     },

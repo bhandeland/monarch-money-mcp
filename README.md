@@ -24,6 +24,7 @@ The quickest way to use this with Claude Desktop on macOS, Windows, or Linux:
 3. The extension's settings are all optional:
    - **Leave them blank** to use a saved login token. Run `login` once in a terminal first (see [Log in once](#1-log-in-once); with [uv](https://docs.astral.sh/uv/) installed you can skip cloning and run `uvx --from git+https://github.com/bhandeland/monarch-money-mcp monarch-money-mcp login`).
    - **Fill in your email and password** (plus your MFA secret if you use 2FA) to have the extension log in by itself and log in again when the token expires. Claude Desktop keeps these in your system keychain.
+   - **Browser cookies** is for when Monarch blocks password login with a CAPTCHA. Paste the Cookie header described in [If Monarch asks for a CAPTCHA](#if-monarch-asks-for-a-captcha).
    - **Session file** only matters if you saved the token somewhere other than the default.
 
 To build the extension yourself: `npx @anthropic-ai/mcpb pack`.
@@ -46,6 +47,17 @@ uvx --from git+https://github.com/bhandeland/monarch-money-mcp monarch-money-mcp
 This asks for your email, password, and MFA code, then saves only the session token to `~/.config/monarch-money-mcp/session.json` (`%USERPROFILE%\.config\monarch-money-mcp\session.json` on Windows), readable only by you. Your password and MFA secret aren't stored anywhere.
 
 If the token stops working, the server's tools return an error asking you to run `login` again.
+
+#### If Monarch asks for a CAPTCHA
+
+Monarch sometimes blocks password logins from scripts with a CAPTCHA. When that happens, `login` says so and asks for your browser's cookies instead. You can also go straight there with `login --cookies`:
+
+1. Log in at [app.monarch.com](https://app.monarch.com) in your browser.
+2. Open the developer tools (F12, or Cmd+Option+I on a Mac) and go to the Network tab.
+3. Reload the page, click any request to `api.monarch.com` (for example `graphql`), and find `Cookie` under Request Headers.
+4. Copy the whole value and paste it at the prompt. It's hidden as you paste.
+
+Only the `session_id` and `csrftoken` cookies are saved, to the same session file. A cookie session can't renew itself, so when it expires (for example after you log out in the browser), run `login --cookies` again with a fresh header.
 
 ### 2. Add the server to your client
 
@@ -112,11 +124,12 @@ Run from a clone, `install` points the client at that clone (`uv --directory /pa
 | Variable | Purpose |
 |---|---|
 | `MONARCH_TOKEN` | Use this token instead of the saved session |
+| `MONARCH_COOKIES` | Use this browser Cookie header (see [If Monarch asks for a CAPTCHA](#if-monarch-asks-for-a-captcha)) instead of the saved session |
 | `MONARCH_SESSION_FILE` | Where `login` saves the token and the server reads it |
 | `MONARCH_EMAIL`, `MONARCH_PASSWORD`, `MONARCH_MFA_SECRET` | Log in automatically, and log in again when the token expires. This keeps your password and MFA secret in the MCP config, so only use it if unattended re-login matters to you. |
 | `MONARCH_FORCE_LOGIN` | With the credentials above, ignore the saved session and log in fresh |
 
-The server tries `MONARCH_TOKEN`, then the saved session, then the credentials.
+The server tries `MONARCH_TOKEN`, then `MONARCH_COOKIES`, then the saved session, then the credentials.
 
 To get an MFA secret for `MONARCH_MFA_SECRET`, turn on 2FA in Monarch's settings and choose "Can't scan?" / "Enter manually" when the QR code is shown. The secret looks like `T5SPVJIBRNPNNINFSH5W7RFVF2XYADYX`.
 
@@ -169,6 +182,7 @@ Show me my current budget status using the get_budgets tool.
 The commands below use the short form `monarch-money-mcp <command>`. Put `uvx --from git+https://github.com/bhandeland/monarch-money-mcp` in front of it, or `uv run` from a clone.
 
 - **"Not logged in" or "session expired"**: run `monarch-money-mcp login`, then restart your client.
+- **"Monarch Money asked for a CAPTCHA"**: automatic login with `MONARCH_EMAIL`/`MONARCH_PASSWORD` was blocked. Run `monarch-money-mcp login --cookies` (see [If Monarch asks for a CAPTCHA](#if-monarch-asks-for-a-captcha)), then restart your client.
 - **Clear the saved session**: `monarch-money-mcp logout`.
 - **MFA problems with `MONARCH_MFA_SECRET`**: check the secret, and that your system clock is accurate (TOTP codes depend on it).
 - **See startup errors**: run `monarch-money-mcp` on its own. Errors go to stderr. Claude Desktop also logs them, in `~/Library/Logs/Claude/` on macOS and `%APPDATA%\Claude\logs\` on Windows.
@@ -211,6 +225,7 @@ This MCP server wraps the monarchmoney Python library to provide seamless integr
 ## Security Notes
 
 - Prefer `login` over putting your password in `.mcp.json`
+- Browser cookies give the same access as being logged in to Monarch - treat them like a password
 - The MFA secret provides full access to your account - treat it like a password
-- The saved session file contains an authentication token - it's created readable only by you; `logout` deletes it
+- The saved session file contains an authentication token or session cookies - it's created readable only by you; `logout` deletes it
 - If you do put credentials in `.mcp.json`, restrict access to that file
