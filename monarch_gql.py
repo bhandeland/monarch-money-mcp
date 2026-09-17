@@ -842,8 +842,237 @@ UPDATE_REPORT_CONFIGURATION = gql("""
 DELETE_REPORT_CONFIGURATION = gql("""
     mutation Common_DeleteReportConfiguration($id: ID!) {
         deleteReportConfiguration(id: $id) {
+# Insights and recap
+# ---------------------------------------------------------------------------
+INSIGHT_LIFECYCLE_STATUSES = ["new", "in_progress", "accepted", "completed", "denied",
+                              "archived", "reopened", "no_longer_applicable"]
+FINANCIAL_INSIGHT_STATUSES = ["new", "in_progress", "accepted", "completed", "denied",
+                              "archived", "reopened", "failed"]
+OPPORTUNITY_TYPES = [
+    "annual_billing", "bundle", "competitor_switch", "duplicate", "expired_promo",
+    "marketplace_review", "new_subscription", "other", "plan_optimization", "product_review",
+    "retention_deal", "tier_downgrade", "transfer_review", "vendor_switch", "yearly_subscription",
+]
+
+INSIGHT_FIELDS = """
+    fragment InsightFields on InsightType {
+        id
+        insightType
+        status
+        isBookmarked
+        feedback
+        feedbackReason
+        prompt
+        ctaLabel
+        ctaDeepLink
+        title { text entityType entityId }
+        body { text entityType entityId }
+        contextLine { text entityType entityId }
+        value
+        valueCaptured
+        valuePeriod
+        refreshedAt
+        updatedAt
+        merchant { id name }
+    }
+"""
+
+GET_INSIGHTS = gql("""
+    query Common_GetInsights(
+        $statuses: [InsightLifecycleStatusEnum!]
+        $bookmarked: Boolean
+        $dismissed: Boolean
+        $unhelpful: Boolean
+        $limit: Int
+        $offset: Int
+    ) {
+        insights(
+            statuses: $statuses
+            bookmarked: $bookmarked
+            dismissed: $dismissed
+            unhelpful: $unhelpful
+            limit: $limit
+            offset: $offset
+        ) {
+            ...InsightFields
+        }
+    }
+""" + INSIGHT_FIELDS)
+
+GET_INSIGHT = gql("""
+    query Common_GetInsight($id: ID!) {
+        insight(id: $id) {
+            ...InsightFields
+        }
+    }
+""" + INSIGHT_FIELDS)
+
+GET_INSIGHT_COUNTS = gql("""
+    query Common_GetInsightCounts {
+        insightCounts {
+            completed
+            bookmarked
+            dismissed
+            unhelpful
+        }
+        insightSurfacedValueTotal
+    }
+""")
+
+UPDATE_INSIGHT_STATUS = gql("""
+    mutation Common_UpdateInsightStatus($input: UpdateInsightStatusInput!) {
+        updateInsightStatus(input: $input) {
+            insight { id status }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+SET_INSIGHT_BOOKMARKED = gql("""
+    mutation Common_SetInsightBookmarked($input: SetInsightBookmarkedInput!) {
+        setInsightBookmarked(input: $input) {
+            insight { id isBookmarked }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+SET_INSIGHT_FEEDBACK = gql("""
+    mutation Common_SetInsightFeedback($input: SetInsightFeedbackInput!) {
+        setInsightFeedback(input: $input) {
+            insight { id feedback feedbackReason }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+SOFT_DELETE_INSIGHT = gql("""
+    mutation Common_SoftDeleteInsight($input: SoftDeleteInsightInput!) {
+        softDeleteInsight(input: $input) {
             deleted
             errors { ...PayloadErrorFields }
         }
     }
 """ + PAYLOAD_ERRORS)
+
+UNDO_INSIGHT_DENIAL = gql("""
+    mutation Common_UndoInsightDenial($input: UndoInsightDenialInput!) {
+        undoInsightDenial(input: $input) {
+            insight { id status }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+FINANCIAL_INSIGHT_FIELDS = """
+    fragment FinancialInsightFields on FinancialInsightType {
+        id
+        merchantNameDisplay
+        productNameDisplay
+        dashboardSubtitle
+        description
+        reasoning
+        effort
+        status
+        opportunityType
+        suggestedActionType
+        executionMethod
+        savingsEstimateLow
+        savingsEstimateHigh
+        capturedSavingsLow
+        currentAnnualCost
+        nextChargeDate
+        score
+        relatedMerchants { name merchantId }
+    }
+"""
+
+GET_FINANCIAL_INSIGHTS = gql("""
+    query Common_GetFinancialInsightsList(
+        $statuses: [InsightStatusEnum!]
+        $opportunityTypes: [OpportunityTypeEnum!]
+        $limit: Int
+        $offset: Int
+    ) {
+        financialInsights(
+            statuses: $statuses
+            opportunityTypes: $opportunityTypes
+            limit: $limit
+            offset: $offset
+        ) {
+            ...FinancialInsightFields
+        }
+    }
+""" + FINANCIAL_INSIGHT_FIELDS)
+
+GET_FINANCIAL_INSIGHT = gql("""
+    query Common_GetFinancialInsight($id: ID!) {
+        financialInsight(id: $id) {
+            ...FinancialInsightFields
+            recurringStreamSnapshot
+            paymentAccount { label }
+            actions {
+                id
+                order
+                suggestedActionType
+                productName
+                merchantPlaybook { id diySteps }
+            }
+        }
+    }
+""" + FINANCIAL_INSIGHT_FIELDS)
+
+GET_FINANCIAL_INSIGHT_SUMMARY = gql("""
+    query Common_GetFinancialInsightSummary($startDate: Date, $endDate: Date) {
+        financialInsightSummary(startDate: $startDate, endDate: $endDate) {
+            totalCapturedSavings
+            totalIdentifiedSavingsLow
+            totalIdentifiedSavingsHigh
+            newCount
+            inProgressCount
+            acceptedCount
+            completedCount
+        }
+        latestFinancialInsightRun {
+            id
+            status
+            trigger
+            createdAt
+            completedAt
+            errorMessage
+            insightsGeneratedCount
+            totalInsightsCount
+        }
+    }
+""")
+
+UPDATE_FINANCIAL_INSIGHT_STATUS = gql("""
+    mutation Common_UpdateFinancialInsightStatus($input: UpdateFinancialInsightStatusInput!) {
+        updateFinancialInsightStatus(input: $input) {
+            financialInsight { id status executionMethod }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+GET_WEEKLY_RECAP = gql("""
+    query Common_GetWeeklyRecap($startDate: Date!, $endDate: Date!) {
+        recap(startDate: $startDate, endDate: $endDate) {
+            id
+            dateRangeStart
+            dateRangeEnd
+            summary
+            sentiment
+            createdAt
+            updatedAt
+            cards {
+                module
+                title
+                headline
+                message
+                sentiment
+                metrics
+            }
+        }
+    }
+""")
