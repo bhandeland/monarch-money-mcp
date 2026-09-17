@@ -4,9 +4,11 @@ These are the same operations Monarch's web app sends (taken from its JS
 bundle). They are unofficial: Monarch can change them without notice.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, cast
 
-from gql import gql  # installed with monarchmoney
+from gql import GraphQLRequest, gql  # installed with monarchmoney
+from graphql import DocumentNode, OperationDefinitionNode
+from monarchmoney import MonarchMoney
 
 PAYLOAD_ERRORS = """
     fragment PayloadErrorFields on PayloadError {
@@ -18,7 +20,19 @@ PAYLOAD_ERRORS = """
 """
 
 
-def raise_payload_errors(errors: Optional[Dict[str, Any]], action: str) -> None:
+async def execute(mm: MonarchMoney, request: GraphQLRequest,
+                  variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run one of the operations below, named after its operation definition."""
+    operation = request.document.definitions[0]
+    assert isinstance(operation, OperationDefinitionNode) and operation.name
+    # gql_call is annotated as taking a DocumentNode, but with gql 4 (which we
+    # use) the library passes it through as a GraphQLRequest.
+    return await mm.gql_call(operation=operation.name.value,
+                             graphql_query=cast(DocumentNode, request),
+                             variables=variables or {})
+
+
+def raise_payload_errors(errors: dict[str, Any] | None, action: str) -> None:
     """Monarch returns an `errors` object on success too, with empty fields."""
     if not errors:
         return
@@ -84,16 +98,16 @@ DELETE_RULE = gql("""
 AMOUNT_OPERATORS = {"eq", "gt", "lt", "between"}
 
 
-def build_rule_input(arguments: Dict[str, Any]) -> Dict[str, Any]:
+def build_rule_input(arguments: dict[str, Any]) -> dict[str, Any]:
     """Translate tool arguments into Monarch's CreateTransactionRuleInput."""
-    criteria = []
+    criteria: list[dict[str, str]] = []
     if arguments.get("merchant_contains"):
         criteria.append({"operator": "contains", "value": arguments["merchant_contains"]})
     if arguments.get("merchant_equals"):
         criteria.append({"operator": "eq", "value": arguments["merchant_equals"]})
 
     amount = arguments.get("amount")
-    amount_criteria = None
+    amount_criteria: dict[str, Any] | None = None
     if amount:
         op = amount.get("operator")
         if op not in AMOUNT_OPERATORS:

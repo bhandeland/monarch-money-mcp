@@ -5,10 +5,12 @@ import os
 import sys
 import asyncio
 import json
-from typing import Any, Awaitable, Callable, Dict, Optional, List
+from collections.abc import Awaitable, Callable
 from datetime import datetime, date
 from pathlib import Path
+from typing import Any
 
+from gql import GraphQLRequest
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.server.models import InitializationOptions
@@ -17,6 +19,9 @@ from monarchmoney import MonarchMoney
 from monarchmoney.monarchmoney import BalanceHistoryRow
 
 import monarch_gql as q
+
+# Tool arguments and API responses are untyped JSON.
+Args = dict[str, Any]
 
 
 def convert_dates_to_strings(obj: Any) -> Any:
@@ -39,7 +44,7 @@ def convert_dates_to_strings(obj: Any) -> Any:
         return obj
 
 
-def parse_date_arg(arguments: Dict[str, Any], key: str) -> Optional[str]:
+def parse_date_arg(arguments: Args, key: str) -> str | None:
     """Validate a YYYY-MM-DD argument and return it as a string.
 
     The monarchmoney library puts dates straight into GraphQL variables, so it
@@ -52,39 +57,46 @@ def parse_date_arg(arguments: Dict[str, Any], key: str) -> Optional[str]:
     return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
 
 
-def date_range_args(arguments: Dict[str, Any]) -> Dict[str, str]:
-    """start_date/end_date kwargs. The Monarch API rejects one without the other."""
+def require_date_arg(arguments: Args, key: str) -> str:
+    value = parse_date_arg(arguments, key)
+    if value is None:
+        raise ValueError(f"{key} is required")
+    return value
+
+
+def date_range(arguments: Args) -> tuple[str | None, str | None]:
+    """start_date/end_date. The Monarch API rejects one without the other."""
     start = parse_date_arg(arguments, "start_date")
     end = parse_date_arg(arguments, "end_date")
     if bool(start) != bool(end):
         raise ValueError("Provide both start_date and end_date, or neither.")
-    return {"start_date": start, "end_date": end} if start else {}
+    return start, end
 
 
-def first_of_month(arguments: Dict[str, Any], key: str) -> Optional[str]:
+def first_of_month(arguments: Args, key: str) -> str | None:
     """Budgets are keyed by the first of the month."""
     value = parse_date_arg(arguments, key)
     return value[:8] + "01" if value else None
 
 
-def pick(arguments: Dict[str, Any], mapping: Dict[str, str]) -> Dict[str, Any]:
+def pick(arguments: Args, mapping: dict[str, str]) -> Args:
     """Copy the arguments that were provided, renaming tool keys to API keys."""
     return {api: arguments[arg] for arg, api in mapping.items() if arg in arguments}
 
 
-def result(data: Any) -> List[TextContent]:
+def result(data: Any) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(convert_dates_to_strings(data), indent=2))]
 
 
 # Initialize the MCP server
-server = Server("monarch-money")
+server: Server[Any] = Server("monarch-money")
 
 # Global variable to store the MonarchMoney client
-mm_client: Optional[MonarchMoney] = None
+mm_client: MonarchMoney | None = None
 session_file = Path.home() / ".monarchmoney_session"
 
 
-async def initialize_client():
+async def initialize_client() -> None:
     """Initialize the MonarchMoney client with authentication."""
     global mm_client
 
@@ -123,17 +135,18 @@ async def initialize_client():
 # Tool registry. Each handler takes the client and the tool arguments and
 # returns JSON-serializable data.
 # ---------------------------------------------------------------------------
-Handler = Callable[[MonarchMoney, Dict[str, Any]], Awaitable[Any]]
-TOOLS: Dict[str, tuple] = {}
+Handler = Callable[[MonarchMoney, Args], Awaitable[Any]]
+TOOLS: dict[str, tuple[Tool, Handler]] = {}
 
 READ = ToolAnnotations(readOnlyHint=True)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
 
 
-def tool(name: str, description: str, properties: Optional[Dict[str, Any]] = None,
-         required: Optional[List[str]] = None, annotations: ToolAnnotations = READ):
-    schema: Dict[str, Any] = {
+def tool(name: str, description: str, properties: Args | None = None,
+         required: list[str] | None = None,
+         annotations: ToolAnnotations = READ) -> Callable[[Handler], Handler]:
+    schema: Args = {
         "type": "object",
         "properties": properties or {},
         "additionalProperties": False,
@@ -148,26 +161,26 @@ def tool(name: str, description: str, properties: Optional[Dict[str, Any]] = Non
     return register
 
 
-def string(description: str, **extra) -> Dict[str, Any]:
+def string(description: str, **extra: Any) -> Args:
     return {"type": "string", "description": description, **extra}
 
 
-def number(description: str) -> Dict[str, Any]:
+def number(description: str) -> Args:
     return {"type": "number", "description": description}
 
 
-def boolean(description: str, default: Optional[bool] = None) -> Dict[str, Any]:
-    prop: Dict[str, Any] = {"type": "boolean", "description": description}
+def boolean(description: str, default: bool | None = None) -> Args:
+    prop: Args = {"type": "boolean", "description": description}
     if default is not None:
         prop["default"] = default
     return prop
 
 
-def id_list(description: str) -> Dict[str, Any]:
+def id_list(description: str) -> Args:
     return {"type": "array", "items": {"type": "string"}, "description": description}
 
 
-DATE_RANGE = {
+DATE_RANGE: Args = {
     "start_date": string("Start date in YYYY-MM-DD format (requires end_date)"),
     "end_date": string("End date in YYYY-MM-DD format (requires start_date)"),
 }
@@ -176,37 +189,37 @@ DATE_RANGE = {
 # --- Accounts ---------------------------------------------------------------
 
 @tool("get_accounts", "Retrieve all linked financial accounts")
-async def get_accounts(mm, args):
+async def get_accounts(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_accounts()
 
 
 @tool("get_account_type_options",
       "List valid account types and subtypes (needed for create_manual_account / update_account)")
-async def get_account_type_options(mm, args):
+async def get_account_type_options(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_account_type_options()
 
 
 @tool("get_institutions", "List connected financial institutions and their connection status")
-async def get_institutions(mm, args):
+async def get_institutions(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_institutions()
 
 
 @tool("get_account_holdings", "Get investment holdings for a brokerage or similar account",
       {"account_id": string("Account ID")}, ["account_id"])
-async def get_account_holdings(mm, args):
+async def get_account_holdings(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_account_holdings(int(args["account_id"]))
 
 
 @tool("get_account_history", "Get the full daily balance history for one account",
       {"account_id": string("Account ID")}, ["account_id"])
-async def get_account_history(mm, args):
+async def get_account_history(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_account_history(int(args["account_id"]))
 
 
 @tool("get_recent_account_balances",
       "Get daily balances for all accounts from start_date (default: last 31 days)",
       {"start_date": string("Start date in YYYY-MM-DD format")})
-async def get_recent_account_balances(mm, args):
+async def get_recent_account_balances(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_recent_account_balances(parse_date_arg(args, "start_date"))
 
 
@@ -215,9 +228,13 @@ async def get_recent_account_balances(mm, args):
       {**DATE_RANGE,
        "account_type": string("Only include accounts of this type, e.g. 'brokerage' "
                               "(see get_account_type_options)")})
-async def get_net_worth_history(mm, args):
+async def get_net_worth_history(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
     return await mm.get_aggregate_snapshots(
-        **date_range_args(args), account_type=args.get("account_type"))
+        start_date=date.fromisoformat(start) if start else None,
+        end_date=date.fromisoformat(end) if end else None,
+        account_type=args.get("account_type"),
+    )
 
 
 @tool("get_account_snapshots_by_type",
@@ -225,9 +242,9 @@ async def get_net_worth_history(mm, args):
       {"start_date": string("Start date in YYYY-MM-DD format"),
        "timeframe": string("Granularity", enum=["month", "year"])},
       ["start_date", "timeframe"])
-async def get_account_snapshots_by_type(mm, args):
+async def get_account_snapshots_by_type(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_account_snapshots_by_type(
-        parse_date_arg(args, "start_date"), args["timeframe"])
+        require_date_arg(args, "start_date"), args["timeframe"])
 
 
 @tool("create_manual_account", "Create a manual (non-synced) account",
@@ -237,7 +254,7 @@ async def get_account_snapshots_by_type(mm, args):
        "include_in_net_worth": boolean("Count this account toward net worth", True),
        "balance": number("Starting balance (default 0)")},
       ["account_name", "account_type", "account_sub_type"], WRITE)
-async def create_manual_account(mm, args):
+async def create_manual_account(mm: MonarchMoney, args: Args) -> Any:
     return await mm.create_manual_account(
         account_type=args["account_type"],
         account_sub_type=args["account_sub_type"],
@@ -258,7 +275,7 @@ async def create_manual_account(mm, args):
        "hide_from_summary_list": boolean("Hide from the accounts summary list"),
        "hide_transactions_from_reports": boolean("Exclude this account's transactions from reports")},
       ["account_id"], WRITE)
-async def update_account(mm, args):
+async def update_account(mm: MonarchMoney, args: Args) -> Any:
     return await mm.update_account(**pick(args, {
         "account_id": "account_id",
         "account_name": "account_name",
@@ -273,7 +290,7 @@ async def update_account(mm, args):
 
 @tool("delete_account", "Permanently delete an account and its transactions",
       {"account_id": string("Account ID")}, ["account_id"], DESTRUCTIVE)
-async def delete_account(mm, args):
+async def delete_account(mm: MonarchMoney, args: Args) -> Any:
     return await mm.delete_account(args["account_id"])
 
 
@@ -290,7 +307,7 @@ async def delete_account(mm, args):
            },
        }},
       ["account_id", "rows"], DESTRUCTIVE)
-async def upload_account_balance_history(mm, args):
+async def upload_account_balance_history(mm: MonarchMoney, args: Args) -> Any:
     rows = [BalanceHistoryRow(datetime.strptime(r["date"], "%Y-%m-%d"), r["amount"])
             for r in args["rows"]]
     completed = await mm.upload_account_balance_history(args["account_id"], rows)
@@ -303,8 +320,9 @@ async def upload_account_balance_history(mm, args):
       {"account_ids": id_list("Accounts to refresh (default: all)"),
        "wait": boolean("Wait for the refresh to finish", False)},
       annotations=WRITE)
-async def refresh_accounts(mm, args):
-    account_ids = args.get("account_ids") or [a["id"] for a in (await mm.get_accounts())["accounts"]]
+async def refresh_accounts(mm: MonarchMoney, args: Args) -> Any:
+    account_ids: list[str] = args.get("account_ids") or [
+        a["id"] for a in (await mm.get_accounts())["accounts"]]
     if args.get("wait"):
         done = await mm.request_accounts_refresh_and_wait(account_ids=account_ids)
         return {"account_ids": account_ids, "completed": done}
@@ -314,7 +332,7 @@ async def refresh_accounts(mm, args):
 
 @tool("get_refresh_status", "Check whether a previously requested account refresh has finished",
       {"account_ids": id_list("Accounts to check (default: all)")})
-async def get_refresh_status(mm, args):
+async def get_refresh_status(mm: MonarchMoney, args: Args) -> Any:
     return {"completed": await mm.is_accounts_refresh_complete(args.get("account_ids") or None)}
 
 
@@ -336,9 +354,9 @@ async def get_refresh_status(mm, args):
        "hidden_from_reports": boolean("Only hidden (true) or visible (false) transactions"),
        "is_split": boolean("Only split (true) or unsplit (false) transactions"),
        "is_recurring": boolean("Only recurring (true) or non-recurring (false) transactions")})
-async def get_transactions(mm, args):
-    filters = date_range_args(args)
-    filters.update(pick(args, {
+async def get_transactions(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    filters = pick(args, {
         "search": "search",
         "tag_ids": "tag_ids",
         "has_attachments": "has_attachments",
@@ -346,17 +364,19 @@ async def get_transactions(mm, args):
         "hidden_from_reports": "hidden_from_reports",
         "is_split": "is_split",
         "is_recurring": "is_recurring",
-    }))
+    })
     # The library takes lists of IDs; the single-ID arguments are kept for compatibility
-    account_ids = list(args.get("account_ids") or [])
+    account_ids: list[str] = list(args.get("account_ids") or [])
     if args.get("account_id"):
         account_ids.append(args["account_id"])
-    category_ids = list(args.get("category_ids") or [])
+    category_ids: list[str] = list(args.get("category_ids") or [])
     if args.get("category_id"):
         category_ids.append(args["category_id"])
     return await mm.get_transactions(
         limit=args.get("limit", 100),
         offset=args.get("offset", 0),
+        start_date=start,
+        end_date=end,
         account_ids=account_ids,
         category_ids=category_ids,
         **filters,
@@ -366,13 +386,13 @@ async def get_transactions(mm, args):
 @tool("get_transaction_details",
       "Get full details for one transaction (original statement text, attachments, splits, goal, etc.)",
       {"transaction_id": string("Transaction ID")}, ["transaction_id"])
-async def get_transaction_details(mm, args):
+async def get_transaction_details(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_transaction_details(args["transaction_id"])
 
 
 @tool("get_transactions_summary",
       "Get aggregate transaction stats (count, sums, averages, date range) for the whole household")
-async def get_transactions_summary(mm, args):
+async def get_transactions_summary(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_transactions_summary()
 
 
@@ -385,9 +405,9 @@ async def get_transactions_summary(mm, args):
        "notes": string("Optional notes for the transaction"),
        "update_balance": boolean("Also adjust the account balance (manual accounts)", False)},
       ["amount", "description", "account_id", "date", "category_id"], WRITE)
-async def create_transaction(mm, args):
+async def create_transaction(mm: MonarchMoney, args: Args) -> Any:
     return await mm.create_transaction(
-        date=parse_date_arg(args, "date"),
+        date=require_date_arg(args, "date"),
         account_id=args["account_id"],
         amount=args["amount"],
         merchant_name=args["description"],
@@ -407,7 +427,7 @@ async def create_transaction(mm, args):
        "hide_from_reports": boolean("Hide this transaction from reports and budgets"),
        "needs_review": boolean("Mark the transaction as needing review")},
       ["transaction_id"], WRITE)
-async def update_transaction(mm, args):
+async def update_transaction(mm: MonarchMoney, args: Args) -> Any:
     updates = pick(args, {
         "transaction_id": "transaction_id",
         "amount": "amount",
@@ -424,14 +444,14 @@ async def update_transaction(mm, args):
 
 @tool("delete_transaction", "Permanently delete a transaction",
       {"transaction_id": string("Transaction ID")}, ["transaction_id"], DESTRUCTIVE)
-async def delete_transaction(mm, args):
+async def delete_transaction(mm: MonarchMoney, args: Args) -> Any:
     return {"transaction_id": args["transaction_id"],
             "deleted": await mm.delete_transaction(args["transaction_id"])}
 
 
 @tool("get_transaction_splits", "Get the split lines for a transaction",
       {"transaction_id": string("Transaction ID")}, ["transaction_id"])
-async def get_transaction_splits(mm, args):
+async def get_transaction_splits(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_transaction_splits(args["transaction_id"])
 
 
@@ -454,7 +474,7 @@ async def get_transaction_splits(mm, args):
            },
        }},
       ["transaction_id", "splits"], DESTRUCTIVE)
-async def update_transaction_splits(mm, args):
+async def update_transaction_splits(mm: MonarchMoney, args: Args) -> Any:
     splits = [pick(s, {"amount": "amount", "category_id": "categoryId",
                        "merchant_name": "merchantName", "notes": "notes"})
               for s in args["splits"]]
@@ -468,7 +488,7 @@ async def update_transaction_splits(mm, args):
       {"transaction_id": string("Transaction ID"),
        "file_path": string("Absolute path to the file on this machine")},
       ["transaction_id", "file_path"], WRITE)
-async def upload_transaction_attachment(mm, args):
+async def upload_transaction_attachment(mm: MonarchMoney, args: Args) -> Any:
     path = Path(args["file_path"]).expanduser()
     return await mm.upload_attachment(args["transaction_id"], path.read_bytes(), path.name)
 
@@ -476,7 +496,7 @@ async def upload_transaction_attachment(mm, args):
 # --- Tags -------------------------------------------------------------------
 
 @tool("get_transaction_tags", "List all transaction tags")
-async def get_transaction_tags(mm, args):
+async def get_transaction_tags(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_transaction_tags()
 
 
@@ -484,7 +504,7 @@ async def get_transaction_tags(mm, args):
       {"name": string("Tag name"),
        "color": string("Hex color including '#', e.g. '#19D2A5'", default="#19D2A5")},
       ["name"], WRITE)
-async def create_transaction_tag(mm, args):
+async def create_transaction_tag(mm: MonarchMoney, args: Args) -> Any:
     return await mm.create_transaction_tag(args["name"], args.get("color", "#19D2A5"))
 
 
@@ -493,19 +513,19 @@ async def create_transaction_tag(mm, args):
       {"transaction_id": string("Transaction ID"),
        "tag_ids": id_list("Tag IDs (see get_transaction_tags)")},
       ["transaction_id", "tag_ids"], WRITE)
-async def set_transaction_tags(mm, args):
+async def set_transaction_tags(mm: MonarchMoney, args: Args) -> Any:
     return await mm.set_transaction_tags(args["transaction_id"], args["tag_ids"])
 
 
 # --- Categories -------------------------------------------------------------
 
 @tool("get_transaction_categories", "List all transaction categories")
-async def get_transaction_categories(mm, args):
+async def get_transaction_categories(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_transaction_categories()
 
 
 @tool("get_transaction_category_groups", "List category groups (needed for create_transaction_category)")
-async def get_transaction_category_groups(mm, args):
+async def get_transaction_category_groups(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_transaction_category_groups()
 
 
@@ -515,7 +535,7 @@ async def get_transaction_category_groups(mm, args):
        "icon": string("Emoji icon", default="❓"),
        "rollover_enabled": boolean("Roll unspent budget over to the next month", False)},
       ["group_id", "name"], WRITE)
-async def create_transaction_category(mm, args):
+async def create_transaction_category(mm: MonarchMoney, args: Args) -> Any:
     return await mm.create_transaction_category(
         group_id=args["group_id"],
         transaction_category_name=args["name"],
@@ -527,22 +547,27 @@ async def create_transaction_category(mm, args):
 @tool("delete_transaction_categories",
       "Delete one or more categories. Their transactions become uncategorized.",
       {"category_ids": id_list("Category IDs to delete")}, ["category_ids"], DESTRUCTIVE)
-async def delete_transaction_categories(mm, args):
-    outcomes = await mm.delete_transaction_categories(args["category_ids"])
-    return [{"category_id": cid, "deleted": ok is True, **({} if ok is True else {"error": str(ok)})}
-            for cid, ok in zip(args["category_ids"], outcomes)]
+async def delete_transaction_categories(mm: MonarchMoney, args: Args) -> Any:
+    category_ids: list[str] = args["category_ids"]
+    outcomes = await mm.delete_transaction_categories(category_ids)
+    return [{"category_id": cid, "deleted": True} if ok is True
+            else {"category_id": cid, "deleted": False, "error": str(ok)}
+            for cid, ok in zip(category_ids, outcomes)]
 
 
 # --- Budgets and cash flow --------------------------------------------------
 
 @tool("get_budgets", "Retrieve budget information", dict(DATE_RANGE))
-async def get_budgets(mm, args):
+async def get_budgets(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
     try:
-        return await mm.get_budgets(**date_range_args(args))
+        return await mm.get_budgets(start_date=start, end_date=end)
     except Exception as e:
         # Monarch returns this opaque error when no budgets exist
         if "Something went wrong while processing: None" in str(e):
-            return {"budgets": [], "message": "No budgets configured in your Monarch Money account"}
+            no_budgets: list[Args] = []
+            return {"budgets": no_budgets,
+                    "message": "No budgets configured in your Monarch Money account"}
         raise
 
 
@@ -567,15 +592,16 @@ async def get_budgets(mm, args):
        "start_date": string("First day of the month to set, YYYY-MM-DD (default: current month)"),
        "apply_to_future": boolean("Also apply the amounts to all later months", False)},
       ["items"], WRITE)
-async def set_budget_amounts(mm, args):
+async def set_budget_amounts(mm: MonarchMoney, args: Args) -> Any:
     start = first_of_month(args, "start_date")
     apply_to_future = bool(args.get("apply_to_future", False))
 
-    results = []
+    results: list[Args] = []
     for item in args["items"]:
         category_id = item.get("category_id") or None
         group_id = item.get("category_group_id") or None
-        entry = {"category_id": category_id, "category_group_id": group_id, "amount": item["amount"]}
+        entry: Args = {"category_id": category_id, "category_group_id": group_id,
+                       "amount": item["amount"]}
         if (category_id is None) == (group_id is None):
             entry.update(ok=False, error="Provide exactly one of category_id or category_group_id")
             results.append(entry)
@@ -604,30 +630,33 @@ async def set_budget_amounts(mm, args):
 
 @tool("get_cashflow", "Cash flow broken down by category, category group, and merchant",
       dict(DATE_RANGE))
-async def get_cashflow(mm, args):
-    return await mm.get_cashflow(**date_range_args(args))
+async def get_cashflow(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    return await mm.get_cashflow(start_date=start, end_date=end)
 
 
 @tool("get_cashflow_summary", "Total income, expenses, savings, and savings rate for a period",
       dict(DATE_RANGE))
-async def get_cashflow_summary(mm, args):
-    return await mm.get_cashflow_summary(**date_range_args(args))
+async def get_cashflow_summary(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    return await mm.get_cashflow_summary(start_date=start, end_date=end)
 
 
 @tool("get_recurring_transactions",
       "List upcoming recurring transactions (bills, subscriptions, income) with merchant, "
       "amount, and account. Defaults to the current month.",
       dict(DATE_RANGE))
-async def get_recurring_transactions(mm, args):
-    return await mm.get_recurring_transactions(**date_range_args(args))
+async def get_recurring_transactions(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    return await mm.get_recurring_transactions(start_date=start, end_date=end)
 
 
 # --- Transaction rules ------------------------------------------------------
 
 @tool("list_transaction_rules",
       "List the household's transaction rules (conditions and actions) in priority order")
-async def list_transaction_rules(mm, args):
-    return await mm.gql_call(operation="GetTransactionRules", graphql_query=q.GET_RULES, variables={})
+async def list_transaction_rules(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_RULES)
 
 
 @tool("create_transaction_rule",
@@ -659,39 +688,31 @@ async def list_transaction_rules(mm, args):
        "add_tag_ids": id_list("Tags to add"),
        "apply_to_existing": boolean("Also apply to matching past transactions", False)},
       annotations=WRITE)
-async def create_transaction_rule(mm, args):
+async def create_transaction_rule(mm: MonarchMoney, args: Args) -> Any:
     rule_input = q.build_rule_input(args)
-    resp = await mm.gql_call(
-        operation="Common_CreateTransactionRuleMutationV2",
-        graphql_query=q.CREATE_RULE,
-        variables={"input": rule_input},
-    )
-    payload = (resp or {}).get("createTransactionRuleV2") or {}
+    resp = await q.execute(mm, q.CREATE_RULE, {"input": rule_input})
+    payload = resp.get("createTransactionRuleV2") or {}
     q.raise_payload_errors(payload.get("errors"), "Rule creation")
     return {"created": payload.get("transactionRule"), "input": rule_input}
 
 
 @tool("delete_transaction_rule", "Delete a transaction rule by id (use list_transaction_rules to find it)",
       {"rule_id": {"type": "string"}}, ["rule_id"], DESTRUCTIVE)
-async def delete_transaction_rule(mm, args):
-    resp = await mm.gql_call(
-        operation="Common_DeleteTransactionRule",
-        graphql_query=q.DELETE_RULE,
-        variables={"id": args["rule_id"]},
-    )
-    payload = (resp or {}).get("deleteTransactionRule") or {}
+async def delete_transaction_rule(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.DELETE_RULE, {"id": args["rule_id"]})
+    payload = resp.get("deleteTransactionRule") or {}
     q.raise_payload_errors(payload.get("errors"), "Rule deletion")
     # Monarch's `deleted` flag isn't reliable (it can come back false on
     # success), so confirm by checking whether the rule still exists.
-    rules = await list_transaction_rules(mm, {})
-    still_there = any(r.get("id") == args["rule_id"] for r in (rules or {}).get("transactionRules") or [])
+    rules = await q.execute(mm, q.GET_RULES)
+    still_there = any(r.get("id") == args["rule_id"] for r in rules.get("transactionRules") or [])
     return {"rule_id": args["rule_id"], "deleted": not still_there,
             "api_deleted_flag": payload.get("deleted")}
 
 
 # --- Goals ------------------------------------------------------------------
 
-GOAL_FIELDS = {
+GOAL_FIELDS: Args = {
     "name": string("Goal name"),
     "type": string("Goal type", enum=q.GOAL_TYPES),
     "target_amount": number("Target amount"),
@@ -704,72 +725,69 @@ GOAL_FIELD_NAMES = {
     "name": "name",
     "type": "type",
     "target_amount": "targetAmount",
-    "target_date": "targetDate",
     "planned_monthly_contribution": "plannedMonthlyContribution",
     "priority": "priority",
     "is_sinking_fund": "isSinkingFund",
 }
 
 
-@tool("get_goals", "List savings goals with balances, progress, and per-account allocations")
-async def get_goals(mm, args):
-    return await mm.gql_call(operation="Common_SavingsGoals",
-                             graphql_query=q.GET_SAVINGS_GOALS, variables={})
-
-
-@tool("create_goal", "Create a savings goal", GOAL_FIELDS, ["name", "type"], WRITE)
-async def create_goal(mm, args):
+def goal_input(args: Args) -> Args:
     goal = pick(args, GOAL_FIELD_NAMES)
     if "target_date" in args:
         goal["targetDate"] = parse_date_arg(args, "target_date")
-    return await mm.gql_call(operation="Common_CreateSavingsGoals",
-                             graphql_query=q.CREATE_SAVINGS_GOALS,
-                             variables={"input": {"goals": [goal]}})
+    return goal
+
+
+@tool("get_goals", "List savings goals with balances, progress, and per-account allocations")
+async def get_goals(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_SAVINGS_GOALS)
+
+
+@tool("create_goal", "Create a savings goal", GOAL_FIELDS, ["name", "type"], WRITE)
+async def create_goal(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.CREATE_SAVINGS_GOALS, {"input": {"goals": [goal_input(args)]}})
 
 
 @tool("update_goal", "Update a savings goal's settings",
       {"goal_id": string("Goal ID (see get_goals)"), **GOAL_FIELDS}, ["goal_id"], WRITE)
-async def update_goal(mm, args):
-    goal = {"id": args["goal_id"], **pick(args, GOAL_FIELD_NAMES)}
-    if "target_date" in args:
-        goal["targetDate"] = parse_date_arg(args, "target_date")
-    resp = await mm.gql_call(operation="Common_UpdateSavingsGoal",
-                             graphql_query=q.UPDATE_SAVINGS_GOAL, variables={"input": goal})
+async def update_goal(mm: MonarchMoney, args: Args) -> Any:
+    goal = {"id": args["goal_id"], **goal_input(args)}
+    resp = await q.execute(mm, q.UPDATE_SAVINGS_GOAL, {"input": goal})
     payload = resp.get("updateSavingsGoal") or {}
     q.raise_payload_errors(payload.get("errors"), "Goal update")
     return payload.get("savingsGoal")
 
 
-async def goal_id_mutation(mm, operation, document, field, goal_id, action):
-    resp = await mm.gql_call(operation=operation, graphql_query=document,
-                             variables={"input": {"id": goal_id}})
-    payload = resp.get(field) or {}
+async def goal_id_mutation(mm: MonarchMoney, request: GraphQLRequest, field: str,
+                           goal_id: str, action: str) -> Args:
+    resp = await q.execute(mm, request, {"input": {"id": goal_id}})
+    payload: Args = resp.get(field) or {}
     q.raise_payload_errors(payload.get("errors"), action)
     return payload
 
 
 @tool("archive_goal", "Archive a savings goal (can be restored with unarchive_goal)",
       {"goal_id": string("Goal ID")}, ["goal_id"], WRITE)
-async def archive_goal(mm, args):
-    return await goal_id_mutation(mm, "Common_ArchiveSavingsGoal", q.ARCHIVE_SAVINGS_GOAL,
-                                  "archiveSavingsGoal", args["goal_id"], "Goal archive")
+async def archive_goal(mm: MonarchMoney, args: Args) -> Any:
+    return await goal_id_mutation(mm, q.ARCHIVE_SAVINGS_GOAL, "archiveSavingsGoal",
+                                  args["goal_id"], "Goal archive")
 
 
 @tool("unarchive_goal", "Restore an archived savings goal",
       {"goal_id": string("Goal ID")}, ["goal_id"], WRITE)
-async def unarchive_goal(mm, args):
-    return await goal_id_mutation(mm, "Common_UnarchiveSavingsGoal", q.UNARCHIVE_SAVINGS_GOAL,
-                                  "unarchiveSavingsGoal", args["goal_id"], "Goal unarchive")
+async def unarchive_goal(mm: MonarchMoney, args: Args) -> Any:
+    return await goal_id_mutation(mm, q.UNARCHIVE_SAVINGS_GOAL, "unarchiveSavingsGoal",
+                                  args["goal_id"], "Goal unarchive")
 
 
 @tool("delete_goal", "Permanently delete a savings goal and its contribution history",
       {"goal_id": string("Goal ID")}, ["goal_id"], DESTRUCTIVE)
-async def delete_goal(mm, args):
-    return await goal_id_mutation(mm, "Common_DeleteSavingsGoal", q.DELETE_SAVINGS_GOAL,
-                                  "deleteSavingsGoal", args["goal_id"], "Goal deletion")
+async def delete_goal(mm: MonarchMoney, args: Args) -> Any:
+    return await goal_id_mutation(mm, q.DELETE_SAVINGS_GOAL, "deleteSavingsGoal",
+                                  args["goal_id"], "Goal deletion")
 
 
-GOAL_MONEY_FIELDS = {
+GOAL_MONEY_FIELDS: Args = {
     "goal_id": string("Goal ID (see get_goals)"),
     "account_id": string("Account the money is held in"),
     "amount": number("Amount (positive)"),
@@ -778,8 +796,8 @@ GOAL_MONEY_FIELDS = {
 }
 
 
-def goal_money_input(args: Dict[str, Any]) -> Dict[str, Any]:
-    money = {"id": args["goal_id"], "accountId": args["account_id"], "amount": args["amount"]}
+def goal_money_input(args: Args) -> Args:
+    money: Args = {"id": args["goal_id"], "accountId": args["account_id"], "amount": args["amount"]}
     if args.get("date"):
         money["date"] = parse_date_arg(args, "date")
     if args.get("notes"):
@@ -789,18 +807,14 @@ def goal_money_input(args: Dict[str, Any]) -> Dict[str, Any]:
 
 @tool("contribute_to_goal", "Record a contribution from an account to a savings goal",
       GOAL_MONEY_FIELDS, ["goal_id", "account_id", "amount"], WRITE)
-async def contribute_to_goal(mm, args):
-    return await mm.gql_call(operation="Common_ContributeToSavingsGoal",
-                             graphql_query=q.CONTRIBUTE_TO_SAVINGS_GOAL,
-                             variables={"input": goal_money_input(args)})
+async def contribute_to_goal(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.CONTRIBUTE_TO_SAVINGS_GOAL, {"input": goal_money_input(args)})
 
 
 @tool("withdraw_from_goal", "Record a withdrawal from a savings goal back to an account",
       GOAL_MONEY_FIELDS, ["goal_id", "account_id", "amount"], WRITE)
-async def withdraw_from_goal(mm, args):
-    return await mm.gql_call(operation="Common_WithdrawFromSavingsGoal",
-                             graphql_query=q.WITHDRAW_FROM_SAVINGS_GOAL,
-                             variables={"input": goal_money_input(args)})
+async def withdraw_from_goal(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.WITHDRAW_FROM_SAVINGS_GOAL, {"input": goal_money_input(args)})
 
 
 @tool("set_goal_budget_amount", "Set the monthly budgeted contribution for a savings goal",
@@ -810,18 +824,14 @@ async def withdraw_from_goal(mm, args):
        "apply_to_future": boolean("Also apply to all later months", False),
        "account_id": string("Account the contribution comes from (optional)")},
       ["goal_id", "amount"], WRITE)
-async def set_goal_budget_amount(mm, args):
-    resp = await mm.gql_call(
-        operation="Common_SetSavingsGoalBudgetAmount",
-        graphql_query=q.SET_SAVINGS_GOAL_BUDGET_AMOUNT,
-        variables={"input": {
-            "savingsGoalId": args["goal_id"],
-            "amount": args["amount"],
-            "month": first_of_month(args, "month") or date.today().replace(day=1).isoformat(),
-            "applyToFuture": args.get("apply_to_future", False),
-            "accountId": args.get("account_id"),
-        }},
-    )
+async def set_goal_budget_amount(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.SET_SAVINGS_GOAL_BUDGET_AMOUNT, {"input": {
+        "savingsGoalId": args["goal_id"],
+        "amount": args["amount"],
+        "month": first_of_month(args, "month") or date.today().replace(day=1).isoformat(),
+        "applyToFuture": args.get("apply_to_future", False),
+        "accountId": args.get("account_id"),
+    }})
     payload = resp.get("setSavingsGoalBudgetAmount") or {}
     q.raise_payload_errors(payload.get("errors"), "Goal budget update")
     return payload
@@ -834,24 +844,19 @@ async def set_goal_budget_amount(mm, args):
        "limit": {"type": "integer", "description": "Maximum results", "default": 100},
        "offset": {"type": "integer", "description": "Results to skip", "default": 0},
        "order_by": string("Sort order", enum=q.MERCHANT_ORDERINGS, default="TRANSACTION_COUNT")})
-async def get_merchants(mm, args):
-    return await mm.gql_call(
-        operation="Web_GetMerchantSettingsPage",
-        graphql_query=q.GET_MERCHANTS,
-        variables={
-            "search": args.get("search") or None,
-            "limit": args.get("limit", 100),
-            "offset": args.get("offset", 0),
-            "orderBy": args.get("order_by", "TRANSACTION_COUNT"),
-        },
-    )
+async def get_merchants(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_MERCHANTS, {
+        "search": args.get("search") or None,
+        "limit": args.get("limit", 100),
+        "offset": args.get("offset", 0),
+        "orderBy": args.get("order_by", "TRANSACTION_COUNT"),
+    })
 
 
 @tool("get_merchant", "Get one merchant's details, including rule count and recurring settings",
       {"merchant_id": string("Merchant ID")}, ["merchant_id"])
-async def get_merchant(mm, args):
-    return await mm.gql_call(operation="Common_GetEditMerchant", graphql_query=q.GET_MERCHANT,
-                             variables={"merchantId": args["merchant_id"]})
+async def get_merchant(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_MERCHANT, {"merchantId": args["merchant_id"]})
 
 
 @tool("update_merchant",
@@ -877,8 +882,8 @@ async def get_merchant(mm, args):
            "additionalProperties": False,
        }},
       ["merchant_id"], WRITE)
-async def update_merchant(mm, args):
-    merchant = {"merchantId": args["merchant_id"], **pick(args, {
+async def update_merchant(mm: MonarchMoney, args: Args) -> Any:
+    merchant: Args = {"merchantId": args["merchant_id"], **pick(args, {
         "name": "name",
         "default_category_id": "defaultCategoryId",
         "default_category_mode": "defaultCategoryApplicationMode",
@@ -891,8 +896,7 @@ async def update_merchant(mm, args):
             "amount": "amount",
             "is_active": "isActive",
         })
-    resp = await mm.gql_call(operation="Common_UpdateMerchant", graphql_query=q.UPDATE_MERCHANT,
-                             variables={"input": merchant})
+    resp = await q.execute(mm, q.UPDATE_MERCHANT, {"input": merchant})
     payload = resp.get("updateMerchant") or {}
     q.raise_payload_errors(payload.get("errors"), "Merchant update")
     return payload.get("merchant")
@@ -904,13 +908,11 @@ async def update_merchant(mm, args):
       {"merchant_id": string("Merchant to delete"),
        "move_to_merchant_id": string("Merchant to merge into")},
       ["merchant_id"], DESTRUCTIVE)
-async def delete_merchant(mm, args):
-    resp = await mm.gql_call(
-        operation="Common_DeleteMerchant",
-        graphql_query=q.DELETE_MERCHANT,
-        variables={"merchantId": args["merchant_id"],
-                   "moveToId": args.get("move_to_merchant_id")},
-    )
+async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.DELETE_MERCHANT, {
+        "merchantId": args["merchant_id"],
+        "moveToId": args.get("move_to_merchant_id"),
+    })
     return {"merchant_id": args["merchant_id"],
             "merged_into": args.get("move_to_merchant_id"),
             "success": (resp.get("deleteMerchant") or {}).get("success")}
@@ -919,25 +921,25 @@ async def delete_merchant(mm, args):
 # --- Other ------------------------------------------------------------------
 
 @tool("get_credit_history", "Get credit score history")
-async def get_credit_history(mm, args):
+async def get_credit_history(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_credit_history()
 
 
 @tool("get_subscription_details", "Get the Monarch Money subscription plan and status")
-async def get_subscription_details(mm, args):
+async def get_subscription_details(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_subscription_details()
 
 
 # ---------------------------------------------------------------------------
 
 @server.list_tools()
-async def list_tools() -> List[Tool]:
+async def list_tools() -> list[Tool]:
     """List all available tools."""
     return [t for t, _ in TOOLS.values()]
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
+async def call_tool(name: str, arguments: Args) -> list[TextContent]:
     """Execute a tool and return the results."""
     if not mm_client:
         return [TextContent(type="text", text="Error: MonarchMoney client not initialized")]
@@ -950,7 +952,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
 
 
-async def serve():
+async def serve() -> None:
     """Authenticate, then run the MCP server over stdio."""
     try:
         await initialize_client()
@@ -970,7 +972,7 @@ async def serve():
         )
 
 
-def main():
+def main() -> None:
     """Console-script entry point."""
     asyncio.run(serve())
 

@@ -11,3 +11,26 @@ dependencies = [
 
 [project.scripts]
 monarch-money-mcp = "server:main"
+
+[dependency-groups]
+dev = [
+    "pyrefly>=1.3.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pyrefly]
+preset = "strict"
+project-includes = ["*.py", "tests"]
+python-interpreter-path = ".venv/bin/python"
+
+# Literal {} / [] test data (mock return values, tool arguments) is fine untyped.
+[[tool.pyrefly.sub-config]]
+matches = "tests/**"
+errors = { implicit-any-empty-container = false }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q --no-header --tb=short -p no:cacheprovider"
+filterwarnings = ["error"]

@@ -130,6 +130,16 @@ The server automatically manages authentication sessions:
 - Run `./clear-sessions.sh` to clear cached sessions
 - Set `MONARCH_FORCE_LOGIN=true` in your `.mcp.json` env section temporarily
 
+## Development
+
+```bash
+uv sync
+./check.sh          # pyrefly (strict) + pytest, prints only problems and a summary
+./check.sh -k goals # extra arguments go to pytest
+```
+
+The tests mock the Monarch client, so they never touch a real account. Every tool gets called through the MCP dispatcher, and a full test run fails if any registered tool has no test. CI runs `./check.sh` on every push and pull request.
+
 ## Credits
 
 ### MCP Server
