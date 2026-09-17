@@ -151,6 +151,7 @@ Read-only tools are marked as such to MCP clients; tools that delete or overwrit
 | Assets and restore | `search_property_values`, `search_vehicle_values`, `get_deleted_accounts`, `create_real_estate_account`, `create_vehicle_account`, `undelete_account` |
 | Reports | `get_report` (totals grouped by category, merchant, owner, business, and/or time period), `get_report_configurations`, `create_report_configuration`, `update_report_configuration`, `delete_report_configuration` |
 | Insights and recap | `get_insights`, `get_insight`, `get_insight_counts`, `update_insight_status`, `set_insight_bookmarked`, `set_insight_feedback`, `dismiss_insight`, `undo_insight_denial`, `get_financial_insights`, `get_financial_insight`, `get_financial_insight_summary`, `update_financial_insight_status`, `get_weekly_recap` |
+| Investments | `get_portfolio`, `search_securities`, `get_security`, `get_security_performance`, `get_security_types`, `get_allocation_categories`, `create_manual_holding`, `update_holding`, `delete_holding`, `create_manual_investments_account`, `set_holding_classification`, `set_security_classification`, `clear_holding_classification`, `clear_security_classification` |
 | Other | `get_household_members`, `search_entities`, `get_credit_history`, `get_subscription_details` |
 
 Each tool's parameters are described in its input schema, which your MCP client shows.
