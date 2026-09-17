@@ -148,6 +148,7 @@ Read-only tools are marked as such to MCP clients; tools that delete or overwrit
 | Rules | `list_transaction_rules`, `preview_transaction_rule`, `create_transaction_rule`, `update_transaction_rule`, `set_transaction_rule_order`, `delete_transaction_rule` |
 | Goals | `get_goals`, `create_goal`, `update_goal`, `archive_goal`, `unarchive_goal`, `delete_goal`, `contribute_to_goal`, `withdraw_from_goal`, `set_goal_budget_amount` |
 | Merchants | `get_merchants`, `get_merchant`, `update_merchant`, `delete_merchant` (merges into `move_to_merchant_id`; Monarch rarely allows a plain delete) |
+| Reports | `get_report` (totals grouped by category, merchant, owner, business, and/or time period), `get_report_configurations`, `create_report_configuration`, `update_report_configuration`, `delete_report_configuration` |
 | Other | `get_household_members`, `search_entities`, `get_credit_history`, `get_subscription_details` |
 
 Each tool's parameters are described in its input schema, which your MCP client shows.

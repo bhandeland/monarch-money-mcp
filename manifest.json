@@ -356,6 +356,26 @@
       "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
     },
     {
+      "name": "get_report",
+      "description": "Totals for transactions matching the filters, optionally grouped by category, merchant, etc."
+    },
+    {
+      "name": "get_report_configurations",
+      "description": "List saved reports (filters and chart settings)."
+    },
+    {
+      "name": "create_report_configuration",
+      "description": "Save a report with these filters and chart settings so it shows up in the web app."
+    },
+    {
+      "name": "update_report_configuration",
+      "description": "Rename a saved report (Monarch only allows changing the name)."
+    },
+    {
+      "name": "delete_report_configuration",
+      "description": "Delete a saved report (transactions are not affected)."
+    },
+    {
       "name": "get_household_members",
       "description": "List household members (IDs for owner_user_id)."
     },

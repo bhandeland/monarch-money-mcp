@@ -1178,6 +1178,217 @@ async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
             "success": (resp.get("deleteMerchant") or {}).get("success")}
 
 
+# --- Reports ----------------------------------------------------------------
+
+REPORT_FILTERS: Args = {
+    **DATE_RANGE,
+    "relative_period": {
+        "type": "object",
+        "description": "Instead of dates: the last N days/weeks/months/quarters/years",
+        "properties": {
+            "unit": {"type": "string", "enum": ["day", "week", "month", "quarter", "year"]},
+            "value": {"type": "integer", "minimum": 1},
+            "include_current": {"type": "boolean", "default": True,
+                                "description": "Count the current period as one of the N"},
+        },
+        "required": ["unit", "value"],
+        "additionalProperties": False,
+    },
+    "category_type": string("Only expense, income, or transfer transactions",
+                            enum=["expense", "income", "transfer"]),
+    "account_ids": id_list("Only these accounts"),
+    "category_ids": id_list("Only these categories"),
+    "exclude_category_ids": id_list("Leave out these categories"),
+    "category_group_ids": id_list("Only these category groups"),
+    "merchant_ids": id_list("Only these merchants"),
+    "tag_ids": id_list("Only transactions with any of these tags"),
+    "is_untagged": boolean("Only transactions without tags"),
+    "is_uncategorized": boolean("Only uncategorized transactions"),
+    "search": string("Free-text search (merchant, notes, etc.)"),
+    "min_amount": number("Minimum absolute amount"),
+    "max_amount": number("Maximum absolute amount"),
+    "budget_variability": string("Only categories with this budget type",
+                                 enum=["fixed", "flexible", "non_monthly"]),
+    "owner_user_ids": id_list("Only transactions owned by these household members"),
+    "include_jointly_owned": boolean("With owner_user_ids, also include joint transactions "
+                                     "(default true)"),
+    "business_entity_ids": id_list("Only transactions for these businesses"),
+    "include_unassigned_business": boolean("With business_entity_ids, also include transactions "
+                                           "without a business (default false)"),
+    "hidden_from_reports": boolean("Only hidden (true) or visible (false) transactions"),
+    "is_recurring": boolean("Only recurring (true) or non-recurring (false) transactions"),
+    "is_pending": boolean("Only pending (true) or posted (false) transactions"),
+    "is_split": boolean("Only split (true) or unsplit (false) transactions"),
+    "is_investment_account": boolean("Only transactions in investment accounts (true) or not"),
+    "has_notes": boolean("Only transactions with (true) or without (false) notes"),
+    "has_attachments": boolean("Only transactions with (true) or without (false) attachments"),
+    "needs_review": boolean("Only transactions that need review (true) or not"),
+    "credits_only": boolean("Only credits (money in)"),
+    "debits_only": boolean("Only debits (money out)"),
+}
+
+REPORT_FILTER_FIELDS = {
+    "category_type": "categoryType",
+    "account_ids": "accounts",
+    "category_ids": "categories",
+    "exclude_category_ids": "excludeCategories",
+    "category_group_ids": "categoryGroups",
+    "merchant_ids": "merchants",
+    "tag_ids": "tags",
+    "is_untagged": "isUntagged",
+    "is_uncategorized": "isUncategorized",
+    "search": "search",
+    "min_amount": "absAmountGte",
+    "max_amount": "absAmountLte",
+    "budget_variability": "budgetVariability",
+    "hidden_from_reports": "hideFromReports",
+    "is_recurring": "isRecurring",
+    "is_pending": "isPending",
+    "is_split": "isSplit",
+    "is_investment_account": "isInvestmentAccount",
+    "has_notes": "hasNotes",
+    "has_attachments": "hasAttachments",
+    "needs_review": "needsReview",
+    "credits_only": "creditsOnly",
+    "debits_only": "debitsOnly",
+}
+
+REPORT_GROUPS = ["category", "category_group", "merchant", "business_entity",
+                 "budget_variability", "owner"]
+REPORT_TYPES = ["cashFlow", "income", "spending"]
+CHART_TYPES = {
+    # The web app derives chartCalculation from the chart type.
+    "pieChart": "totalAmounts",
+    "horizontalBarChart": "totalAmounts",
+    "treemapChart": "totalAmounts",
+    "sankeyCashFlowChart": "totalAmounts",
+    "profitLossTable": "totalAmounts",
+    "barChart": "changeOverTime",
+    "stackedBarChart": "changeOverTime",
+    "cashFlowChart": "changeOverTime",
+    "stackedCashFlowChart": "changeOverTime",
+}
+REPORT_VIEW: Args = {
+    "report_type": string("Which report page it opens as", enum=REPORT_TYPES),
+    "chart_type": string("How the web app charts it", enum=list(CHART_TYPES)),
+    "timeframe": string("Time bucket for charts over time",
+                        enum=["day", "week", "month", "quarter", "year"]),
+}
+
+
+def report_filters(args: Args) -> Args:
+    """TransactionFilterInput from the REPORT_FILTERS arguments."""
+    start, end = date_range(args)
+    period = args.get("relative_period")
+    if period and start:
+        raise ValueError("Give either start_date/end_date or relative_period, not both.")
+    filters: Args = {}
+    if start:
+        filters.update(startDate=start, endDate=end)
+    filters.update(pick(args, REPORT_FILTER_FIELDS))
+    if period:
+        filters["timeframePeriod"] = {"unit": period["unit"], "value": period["value"],
+                                      "includeCurrent": period.get("include_current", True)}
+    if args.get("owner_user_ids"):
+        filters["ownershipSet"] = {"userIds": args["owner_user_ids"],
+                                   "includeJointlyOwned": args.get("include_jointly_owned", True)}
+    if args.get("business_entity_ids"):
+        filters["businessEntitySet"] = {
+            "businessEntityIds": args["business_entity_ids"],
+            "includeUnassigned": args.get("include_unassigned_business", False)}
+    return filters
+
+
+def report_view(args: Args) -> Args | None:
+    view = pick(args, {"report_type": "analysisScope", "chart_type": "chartType",
+                       "timeframe": "timeframe"})
+    if "chart_type" in args:
+        view["chartCalculation"] = CHART_TYPES[args["chart_type"]]
+    return view or None
+
+
+@tool("get_report",
+      "Totals for transactions matching the filters, optionally grouped by category, merchant, "
+      "etc. and/or by time period, like the web app's Reports page. Returns each group's "
+      "summary (sum, avg, count, max, income, expense, savings) and the overall total. "
+      "Expenses are negative.",
+      {**REPORT_FILTERS,
+       "group_by": {"type": "array", "maxItems": 2, "description": "Group by these, e.g. "
+                    "[\"category\"] (combine with timeframe for a breakdown per period)",
+                    "items": {"type": "string", "enum": REPORT_GROUPS}},
+       "timeframe": string("Also group by this period",
+                           enum=["day", "week", "month", "quarter", "year"]),
+       "sort_by": string("Order groups by this summary value",
+                         enum=["sum", "sum_expense", "sum_income", "sum_transfer", "avg",
+                               "avg_expense", "avg_income", "count", "max", "max_expense",
+                               "max_income", "min", "first", "last"]),
+       "fill_empty_values": boolean("Include empty periods with zero values", False)})
+async def get_report(mm: MonarchMoney, args: Args) -> Any:
+    groups: list[str] = args.get("group_by") or []
+    variables: Args = {
+        "filters": report_filters(args),
+        "fillEmptyValues": args.get("fill_empty_values", False),
+        **{f"include{''.join(w.title() for w in g.split('_'))}": g in groups
+           for g in REPORT_GROUPS},
+        **pick(args, {"timeframe": "groupByTimeframe", "sort_by": "sortBy"}),
+    }
+    if groups:
+        variables["groupBy"] = groups
+    resp = await q.execute(mm, q.GET_REPORTS_DATA, variables)
+    aggregates = resp.get("aggregates") or []
+    return {
+        "groups": [{"group": {k: v for k, v in (row.get("groupBy") or {}).items() if v is not None},
+                    "summary": row.get("summary")} for row in resp.get("reports") or []],
+        "total": aggregates[0].get("summary") if aggregates else None,
+    }
+
+
+@tool("get_report_configurations", "List saved reports (filters and chart settings)")
+async def get_report_configurations(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_REPORT_CONFIGURATIONS)).get("reportConfigurations")
+
+
+@tool("create_report_configuration",
+      "Save a report with these filters and chart settings so it shows up in the web app",
+      {"display_name": string("Report name"), **REPORT_FILTERS, **REPORT_VIEW},
+      ["display_name"], WRITE)
+async def create_report_configuration(mm: MonarchMoney, args: Args) -> Any:
+    report: Args = {"displayName": args["display_name"],
+                    "transactionFilters": report_filters(args)}
+    view = report_view(args)
+    if view:
+        report["reportView"] = view
+    resp = await q.execute(mm, q.CREATE_REPORT_CONFIGURATION, {"input": report})
+    payload = resp.get("createReportConfiguration") or {}
+    q.raise_payload_errors(payload.get("errors"), "Report creation")
+    return payload.get("reportConfiguration")
+
+
+@tool("update_report_configuration",
+      "Rename a saved report (Monarch only allows changing the name)",
+      {"report_configuration_id": string("Saved report ID"),
+       "display_name": string("New name")},
+      ["report_configuration_id", "display_name"], WRITE)
+async def update_report_configuration(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.UPDATE_REPORT_CONFIGURATION, {"input": {
+        "id": args["report_configuration_id"], "displayName": args["display_name"]}})
+    payload = resp.get("updateReportConfiguration") or {}
+    q.raise_payload_errors(payload.get("errors"), "Report update")
+    return payload.get("reportConfiguration")
+
+
+@tool("delete_report_configuration", "Delete a saved report (transactions are not affected)",
+      {"report_configuration_id": string("Saved report ID")},
+      ["report_configuration_id"], DESTRUCTIVE)
+async def delete_report_configuration(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.DELETE_REPORT_CONFIGURATION,
+                           {"id": args["report_configuration_id"]})
+    payload = resp.get("deleteReportConfiguration") or {}
+    q.raise_payload_errors(payload.get("errors"), "Report deletion")
+    return {"report_configuration_id": args["report_configuration_id"],
+            "deleted": payload.get("deleted")}
+
+
 # --- Other ------------------------------------------------------------------
 
 @tool("get_household_members", "List household members (IDs for owner_user_id)")

@@ -648,3 +648,137 @@ GET_RECURRING_REMAINING_DUE = gql("""
         }
     }
 """)
+
+
+# --- Reports ---------------------------------------------------------------
+
+REPORT_CONFIGURATION_FIELDS = """
+    fragment ReportConfigurationFields on ReportConfiguration {
+        id
+        displayName
+        transactionFilterSet {
+            id
+            categories { id name }
+            categoryGroups { id name type }
+            accounts { id displayName }
+            merchants { id name }
+            tags { id name }
+            isUntagged
+            searchQuery
+            categoryType
+            isUncategorized
+            budgetVariability
+            isFlexSpending
+            startDate
+            endDate
+            timeframePeriod { unit value includeCurrent }
+            absAmountGte
+            absAmountLte
+            isSplit
+            isRecurring
+            isInvestmentAccount
+            isPending
+            creditsOnly
+            debitsOnly
+            hasNotes
+            hasAttachments
+            hiddenFromReports
+            needsReview
+            ownershipSet { includeJointlyOwned users { id name } }
+            businessEntitySet { includeUnassigned businessEntities { id name } }
+        }
+        reportView {
+            analysisScope
+            chartType
+            chartCalculation
+            chartLayout
+            chartDensity
+            dimensions
+            timeframe
+        }
+    }
+"""
+
+GET_REPORTS_DATA = gql("""
+    query Common_GetReportsData(
+        $filters: TransactionFilterInput!
+        $groupBy: [ReportsGroupByEntity!]
+        $groupByTimeframe: ReportsGroupByTimeframe
+        $sortBy: ReportsSortBy
+        $includeCategory: Boolean = false
+        $includeCategoryGroup: Boolean = false
+        $includeMerchant: Boolean = false
+        $includeBusinessEntity: Boolean = false
+        $includeBudgetVariability: Boolean = false
+        $includeOwner: Boolean = false
+        $fillEmptyValues: Boolean = true
+    ) {
+        reports(
+            groupBy: $groupBy
+            groupByTimeframe: $groupByTimeframe
+            filters: $filters
+            sortBy: $sortBy
+            fillEmptyValues: $fillEmptyValues
+        ) {
+            groupBy {
+                date
+                category @include(if: $includeCategory) { id name group { id name type } }
+                categoryGroup @include(if: $includeCategoryGroup) { id name type }
+                merchant @include(if: $includeMerchant) { id name }
+                businessEntity @include(if: $includeBusinessEntity) { id name }
+                budgetVariability @include(if: $includeBudgetVariability) { id name }
+                owner @include(if: $includeOwner) { id name displayName }
+            }
+            summary { ...ReportsSummaryFields }
+        }
+        aggregates(filters: $filters, fillEmptyValues: $fillEmptyValues) {
+            summary { ...ReportsSummaryFields }
+        }
+    }
+
+    fragment ReportsSummaryFields on TransactionsSummary {
+        sum
+        avg
+        count
+        max
+        sumIncome
+        sumExpense
+        savings
+        savingsRate
+        first
+        last
+    }
+""")
+
+GET_REPORT_CONFIGURATIONS = gql("""
+    query Common_GetReportConfigurations {
+        reportConfigurations { ...ReportConfigurationFields }
+    }
+""" + REPORT_CONFIGURATION_FIELDS)
+
+CREATE_REPORT_CONFIGURATION = gql("""
+    mutation Common_CreateReportConfiguration($input: CreateReportConfigurationInput!) {
+        createReportConfiguration(input: $input) {
+            reportConfiguration { ...ReportConfigurationFields }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + REPORT_CONFIGURATION_FIELDS + PAYLOAD_ERRORS)
+
+UPDATE_REPORT_CONFIGURATION = gql("""
+    mutation Common_UpdateReportConfiguration($input: UpdateReportConfigurationInput!) {
+        updateReportConfiguration(input: $input) {
+            reportConfiguration { ...ReportConfigurationFields }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + REPORT_CONFIGURATION_FIELDS + PAYLOAD_ERRORS)
+
+DELETE_REPORT_CONFIGURATION = gql("""
+    mutation Common_DeleteReportConfiguration($id: ID!) {
+        deleteReportConfiguration(id: $id) {
+            deleted
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
