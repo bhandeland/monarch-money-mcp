@@ -356,6 +356,26 @@
       "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
     },
     {
+      "name": "get_budget_settings",
+      "description": "Get the budget system (fixed_and_flex or groups_and_categories), whether budget edits apply to future months by default, the flex rollover period, and whether a budget exists."
+    },
+    {
+      "name": "move_budget_money",
+      "description": "Move budgeted money from one category, category group, or the flex bucket to another for one month, like the web app's Move Money."
+    },
+    {
+      "name": "set_flex_budget_amount",
+      "description": "Set the monthly flex bucket budget (fixed_and_flex budgets)."
+    },
+    {
+      "name": "update_budget_settings",
+      "description": "Change budget settings: whether budget edits apply to future months by default, and flex bucket rollover."
+    },
+    {
+      "name": "reset_budget_rollover",
+      "description": "Restart rollover for a category or category group from a given month, discarding the rollover balance accumulated before it."
+    },
+    {
       "name": "get_household_members",
       "description": "List household members (IDs for owner_user_id)."
     },

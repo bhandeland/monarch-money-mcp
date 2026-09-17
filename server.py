@@ -1178,6 +1178,126 @@ async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
             "success": (resp.get("deleteMerchant") or {}).get("success")}
 
 
+# --- Budget moves and flex --------------------------------------------------
+
+def this_month() -> str:
+    return date.today().replace(day=1).isoformat()
+
+
+def budget_endpoint(args: Args, side: str) -> Args:
+    """The from/to part of a money move: a category, a category group, or the flex bucket."""
+    category = args.get(f"{side}_category_id") or None
+    group = args.get(f"{side}_category_group_id") or None
+    flex = bool(args.get(f"{side}_flex"))
+    if [category is not None, group is not None, flex].count(True) != 1:
+        raise ValueError(f"Give exactly one of {side}_category_id, {side}_category_group_id, "
+                         f"or {side}_flex")
+    if flex:
+        return {f"{side}BudgetTarget": "flex_expense"}
+    if category:
+        return {f"{side}CategoryId": category}
+    return {f"{side}CategoryGroupId": group}
+
+
+@tool("get_budget_settings",
+      "Get the budget system (fixed_and_flex or groups_and_categories), whether budget edits "
+      "apply to future months by default, the flex rollover period, and whether a budget exists")
+async def get_budget_settings(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_BUDGET_SETTINGS)
+
+
+@tool("move_budget_money",
+      "Move budgeted money from one category, category group, or the flex bucket to another "
+      "for one month, like the web app's Move Money. Give exactly one from_ and one to_.",
+      {"amount": number("Amount to move (greater than 0)"),
+       "start_date": string("Any day in the month to change, YYYY-MM-DD (default: current month)"),
+       "from_category_id": string("Take the money from this category"),
+       "from_category_group_id": string("Take the money from this category group"),
+       "from_flex": boolean("Take the money from the flex bucket (fixed_and_flex budgets)"),
+       "to_category_id": string("Give the money to this category"),
+       "to_category_group_id": string("Give the money to this category group"),
+       "to_flex": boolean("Give the money to the flex bucket (fixed_and_flex budgets)")},
+      ["amount"], WRITE)
+async def move_budget_money(mm: MonarchMoney, args: Args) -> Any:
+    if args["amount"] <= 0:
+        raise ValueError("amount must be greater than 0")
+    source, destination = budget_endpoint(args, "from"), budget_endpoint(args, "to")
+    if list(source.values()) == list(destination.values()):
+        raise ValueError("from_ and to_ must be different")
+    start = first_of_month(args, "start_date") or this_month()
+    resp = await q.execute(mm, q.MOVE_BUDGET_MONEY, {"input": {
+        "amount": args["amount"], "startDate": start, "timeframe": "month",
+        **source, **destination}})
+    payload = resp.get("moveMoneyBetweenCategories") or {}
+    q.raise_payload_errors(payload.get("errors"), "Moving budget money")
+    return {"start_date": start, "from": payload.get("fromBudgetItem"),
+            "to": payload.get("toBudgetItem")}
+
+
+@tool("set_flex_budget_amount",
+      "Set the monthly flex bucket budget (fixed_and_flex budgets). An amount of 0 clears it.",
+      {"amount": number("Flex budget amount for the month"),
+       "start_date": string("Any day in the month to set, YYYY-MM-DD (default: current month)"),
+       "apply_to_future": boolean("Also apply the amount to all later months", False)},
+      ["amount"], WRITE)
+async def set_flex_budget_amount(mm: MonarchMoney, args: Args) -> Any:
+    start = first_of_month(args, "start_date")
+    apply_to_future = bool(args.get("apply_to_future", False))
+    resp = await mm.update_flexible_budget(amount=args["amount"], start_date=start,
+                                           apply_to_future=apply_to_future)
+    return {"start_date": start or "current month", "apply_to_future": apply_to_future,
+            "budget_item": (resp.get("updateOrCreateFlexBudgetItem") or {}).get("budgetItem")}
+
+
+@tool("update_budget_settings",
+      "Change budget settings: whether budget edits apply to future months by default, and flex "
+      "bucket rollover. Rollover fields you leave out keep their current values. Turning "
+      "rollover off discards the flex rollover period.",
+      {"apply_to_future_default": boolean("Apply budget edits to future months by default"),
+       "flex_rollover_enabled": boolean("Roll unspent flex budget over to the next month"),
+       "flex_rollover_start_month": string("Month flex rollover starts from, YYYY-MM-DD"),
+       "flex_rollover_starting_balance": number("Flex rollover balance at the start month")},
+      annotations=DESTRUCTIVE)
+async def update_budget_settings(mm: MonarchMoney, args: Args) -> Any:
+    settings: Args = {}
+    if "apply_to_future_default" in args:
+        settings["budgetApplyToFutureMonthsDefault"] = args["apply_to_future_default"]
+    rollover_args = ("flex_rollover_enabled", "flex_rollover_start_month",
+                     "flex_rollover_starting_balance")
+    if any(key in args for key in rollover_args):
+        # Like the web app, send the whole rollover setting, filling gaps from the current period.
+        current = (await q.execute(mm, q.GET_BUDGET_SETTINGS)).get("flexExpenseRolloverPeriod") or {}
+        settings["rolloverEnabled"] = args.get("flex_rollover_enabled", True)
+        settings["rolloverStartMonth"] = (first_of_month(args, "flex_rollover_start_month")
+                                          or current.get("startMonth") or this_month())
+        settings["rolloverStartingBalance"] = args.get(
+            "flex_rollover_starting_balance", current.get("startingBalance") or 0)
+    if not settings:
+        raise ValueError("Nothing to update: give at least one setting")
+    resp = await q.execute(mm, q.UPDATE_BUDGET_SETTINGS, {"input": settings})
+    return resp.get("updateBudgetSettings")
+
+
+@tool("reset_budget_rollover",
+      "Restart rollover for a category or category group from a given month, discarding the "
+      "rollover balance accumulated before it",
+      {"category_id": string("Category to reset"),
+       "category_group_id": string("Category group to reset"),
+       "start_month": string("Month the new rollover period starts, YYYY-MM-DD"),
+       "starting_balance": number("Rollover balance to start with (default: 0)")},
+      ["start_month"], DESTRUCTIVE)
+async def reset_budget_rollover(mm: MonarchMoney, args: Args) -> Any:
+    target = pick(args, {"category_id": "categoryId", "category_group_id": "categoryGroupId"})
+    if len(target) != 1:
+        raise ValueError("Give exactly one of category_id or category_group_id")
+    resp = await q.execute(mm, q.RESET_BUDGET_ROLLOVER, {"input": {
+        **target, "startMonth": require_date_arg(args, "start_month")[:8] + "01",
+        **pick(args, {"starting_balance": "startingBalance"})}})
+    payload = resp.get("resetBudgetRollover") or {}
+    q.raise_payload_errors(payload.get("errors"), "Rollover reset")
+    return payload.get("budgetRolloverPeriod")
+
+
 # --- Other ------------------------------------------------------------------
 
 @tool("get_household_members", "List household members (IDs for owner_user_id)")

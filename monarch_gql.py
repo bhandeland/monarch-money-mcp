@@ -648,3 +648,69 @@ GET_RECURRING_REMAINING_DUE = gql("""
         }
     }
 """)
+
+
+# ---------------------------------------------------------------------------
+# Budget moves and flex
+# ---------------------------------------------------------------------------
+GET_BUDGET_SETTINGS = gql("""
+    query Common_GetBudgetSettings {
+        budgetSystem
+        budgetApplyToFutureMonthsDefault
+        flexExpenseRolloverPeriod {
+            id
+            startMonth
+            endMonth
+            startingBalance
+            targetAmount
+            frequency
+            type
+        }
+        budgetStatus {
+            hasBudget
+            hasTransactions
+            willCreateBudgetFromEmptyDefaultCategories
+        }
+    }
+""")
+
+MOVE_BUDGET_MONEY = gql("""
+    mutation Web_MoveMoneyMutation($input: MoveMoneyMutationInput!) {
+        moveMoneyBetweenCategories(input: $input) {
+            fromBudgetItem { id budgetAmount }
+            toBudgetItem { id budgetAmount }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+UPDATE_BUDGET_SETTINGS = gql("""
+    mutation Common_UpdateBudgetSettings($input: UpdateBudgetSettingsMutationInput!) {
+        updateBudgetSettings(input: $input) {
+            budgetSystem
+            budgetApplyToFutureMonthsDefault
+            budgetRolloverPeriod {
+                id
+                startMonth
+                startingBalance
+            }
+        }
+    }
+""")
+
+RESET_BUDGET_ROLLOVER = gql("""
+    mutation Web_ResetRolloverMutation($input: ResetBudgetRolloverInput!) {
+        resetBudgetRollover(input: $input) {
+            budgetRolloverPeriod {
+                id
+                startMonth
+                endMonth
+                startingBalance
+                targetAmount
+                frequency
+                type
+            }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
