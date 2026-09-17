@@ -190,6 +190,10 @@ Monarch's web app ships a copy of its GraphQL schema. `scripts/fetch_schema.py` 
 
 `manifest.json` describes the Claude Desktop extension. After adding or changing a tool, or bumping the version, run `uv run python scripts/update_manifest.py`; a test fails until the manifest matches. Pushing a `v*` tag that matches the version in `pyproject.toml` builds the `.mcpb` and attaches it to a GitHub release.
 
+## License
+
+The changes made in this fork are released under the [MIT License](LICENSE). The original upstream repository, [colvint/monarch-money-mcp](https://github.com/colvint/monarch-money-mcp), has no license, so the MIT License can't cover the code that came from it.
+
 ## Credits
 
 ### MCP Server

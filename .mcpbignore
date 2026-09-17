@@ -1,4 +1,4 @@
-# Only the server, pyproject.toml, uv.lock, README.md, and manifest.json go in the bundle.
+# Only the server, pyproject.toml, uv.lock, README.md, LICENSE, and manifest.json go in the bundle.
 .venv/
 .git/
 .github/

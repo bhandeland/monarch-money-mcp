@@ -14,6 +14,7 @@
     "type": "git",
     "url": "https://github.com/bhandeland/monarch-money-mcp"
   },
+  "license": "MIT",
   "homepage": "https://github.com/bhandeland/monarch-money-mcp",
   "support": "https://github.com/bhandeland/monarch-money-mcp/issues",
   "keywords": [
