@@ -14,6 +14,7 @@ from mcp.server.models import InitializationOptions
 from mcp.types import ServerCapabilities
 from mcp.types import Tool, TextContent
 from monarchmoney import MonarchMoney
+from gql import gql  # installed with monarchmoney
 
 
 def convert_dates_to_strings(obj: Any) -> Any:
@@ -34,6 +35,152 @@ def convert_dates_to_strings(obj: Any) -> Any:
         return tuple(convert_dates_to_strings(item) for item in obj)
     else:
         return obj
+
+def parse_date_arg(arguments: Dict[str, Any], key: str) -> Optional[str]:
+    """Validate a YYYY-MM-DD argument and return it as a string.
+
+    The monarchmoney library puts dates straight into GraphQL variables, so it
+    needs strings. Passing date objects causes "Object of type date is not JSON
+    serializable".
+    """
+    value = arguments.get(key)
+    if value in (None, ""):
+        return None
+    return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+
+
+def require_date_pair(start: Optional[str], end: Optional[str]) -> None:
+    """The Monarch API rejects a start_date without an end_date (and vice versa)."""
+    if bool(start) != bool(end):
+        raise ValueError("Provide both start_date and end_date, or neither.")
+
+
+# ---------------------------------------------------------------------------
+# Transaction rules. The monarchmoney library doesn't wrap these, so we call
+# Monarch's GraphQL operations directly (same operations the web app uses).
+# Unofficial: Monarch can change these without notice.
+# ---------------------------------------------------------------------------
+PAYLOAD_ERRORS = """
+    fragment PayloadErrorFields on PayloadError {
+        fieldErrors { field messages __typename }
+        message
+        code
+        __typename
+    }
+"""
+
+GET_RULES = gql("""
+    query GetTransactionRules {
+        transactionRules {
+            id
+            order
+            merchantCriteriaUseOriginalStatement
+            merchantCriteria { operator value __typename }
+            amountCriteria {
+                operator isExpense value
+                valueRange { lower upper __typename }
+                __typename
+            }
+            categoryIds
+            accountIds
+            categories { id name __typename }
+            accounts { id displayName __typename }
+            setMerchantAction { id name __typename }
+            setCategoryAction { id name __typename }
+            addTagsAction { id name __typename }
+            setHideFromReportsAction
+            reviewStatusAction
+            recentApplicationCount
+            lastAppliedAt
+            __typename
+        }
+    }
+""")
+
+CREATE_RULE = gql("""
+    mutation Common_CreateTransactionRuleMutationV2($input: CreateTransactionRuleInput!) {
+        createTransactionRuleV2(input: $input) {
+            errors { ...PayloadErrorFields __typename }
+            transactionRule { id __typename }
+            __typename
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+DELETE_RULE = gql("""
+    mutation Common_DeleteTransactionRule($id: ID!) {
+        deleteTransactionRule(id: $id) {
+            deleted
+            errors { ...PayloadErrorFields __typename }
+            __typename
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+AMOUNT_OPERATORS = {"eq", "gt", "lt", "between"}
+TEXT_OPERATORS = {"eq", "contains"}
+
+
+def raise_payload_errors(errors: Optional[Dict[str, Any]], action: str) -> None:
+    """Monarch returns an `errors` object on success too, with empty fields."""
+    if not errors:
+        return
+    if errors.get("message"):
+        raise RuntimeError(f"{action} failed: {errors['message']}")
+    field_errors = errors.get("fieldErrors") or []
+    if field_errors:
+        detail = "; ".join(f"{fe['field']}: {', '.join(fe['messages'])}" for fe in field_errors)
+        raise RuntimeError(f"{action} failed: {detail}")
+
+
+def build_rule_input(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate tool arguments into Monarch's CreateTransactionRuleInput."""
+    criteria = []
+    if arguments.get("merchant_contains"):
+        criteria.append({"operator": "contains", "value": arguments["merchant_contains"]})
+    if arguments.get("merchant_equals"):
+        criteria.append({"operator": "eq", "value": arguments["merchant_equals"]})
+
+    amount = arguments.get("amount")
+    amount_criteria = None
+    if amount:
+        op = amount.get("operator")
+        if op not in AMOUNT_OPERATORS:
+            raise ValueError(f"amount.operator must be one of {sorted(AMOUNT_OPERATORS)}")
+        amount_criteria = {
+            "operator": op,
+            "isExpense": amount.get("is_expense", True),
+            "value": None,
+            "valueRange": None,
+        }
+        if op == "between":
+            if amount.get("lower") is None or amount.get("upper") is None:
+                raise ValueError("amount.lower and amount.upper are required for 'between'")
+            amount_criteria["valueRange"] = {"lower": amount["lower"], "upper": amount["upper"]}
+        else:
+            if amount.get("value") is None:
+                raise ValueError("amount.value is required unless operator is 'between'")
+            amount_criteria["value"] = amount["value"]
+
+    if not criteria and not amount_criteria and not arguments.get("account_ids") \
+            and not arguments.get("match_category_ids"):
+        raise ValueError("A rule needs at least one condition (merchant, amount, account, or category)")
+    if not arguments.get("set_category_id") and not arguments.get("set_merchant_name"):
+        raise ValueError("A rule needs an action: set_category_id and/or set_merchant_name")
+
+    return {
+        "merchantCriteria": criteria or None,
+        "merchantCriteriaUseOriginalStatement": bool(arguments.get("use_original_statement", False)),
+        "amountCriteria": amount_criteria,
+        "accountIds": arguments.get("account_ids") or None,
+        "categoryIds": arguments.get("match_category_ids") or None,
+        "setCategoryAction": arguments.get("set_category_id") or None,
+        "setMerchantAction": arguments.get("set_merchant_name") or None,
+        "addTagsAction": None,
+        "splitTransactionsAction": None,
+        "applyToExistingTransactions": bool(arguments.get("apply_to_existing", False)),
+    }
+
 
 # Initialize the MCP server
 server = Server("monarch-money")
@@ -185,7 +332,7 @@ async def list_tools() -> List[Tool]:
                     },
                     "description": {
                         "type": "string",
-                        "description": "Transaction description"
+                        "description": "Merchant name / description shown for the transaction"
                     },
                     "category_id": {
                         "type": "string",
@@ -204,7 +351,7 @@ async def list_tools() -> List[Tool]:
                         "description": "Optional notes for the transaction"
                     }
                 },
-                "required": ["amount", "description", "account_id", "date"],
+                "required": ["amount", "description", "account_id", "date", "category_id"],
                 "additionalProperties": False
             }
         ),
@@ -224,7 +371,7 @@ async def list_tools() -> List[Tool]:
                     },
                     "description": {
                         "type": "string",
-                        "description": "New transaction description"
+                        "description": "New merchant name / description"
                     },
                     "category_id": {
                         "type": "string",
@@ -240,6 +387,104 @@ async def list_tools() -> List[Tool]:
                     }
                 },
                 "required": ["transaction_id"],
+                "additionalProperties": False
+            }
+        ),
+        Tool(
+            name="set_budget_amounts",
+            description=(
+                "Set monthly budget amounts for one or more categories or category groups. "
+                "Each item needs an amount and exactly one of category_id or category_group_id. "
+                "An amount of 0 clears that budget. Items are applied in order; results are "
+                "reported per item."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "category_id": {"type": "string"},
+                                "category_group_id": {"type": "string"},
+                                "amount": {"type": "number"}
+                            },
+                            "required": ["amount"],
+                            "additionalProperties": False
+                        }
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "First day of the month to set, YYYY-MM-DD (default: current month)"
+                    },
+                    "apply_to_future": {
+                        "type": "boolean",
+                        "description": "Also apply the amounts to all later months",
+                        "default": False
+                    }
+                },
+                "required": ["items"],
+                "additionalProperties": False
+            }
+        ),
+        Tool(
+            name="list_transaction_rules",
+            description="List the household's transaction rules (conditions and actions) in priority order",
+            inputSchema={"type": "object", "properties": {}, "additionalProperties": False}
+        ),
+        Tool(
+            name="create_transaction_rule",
+            description=(
+                "Create a transaction rule. Conditions (combine as needed): merchant_contains / "
+                "merchant_equals, amount, account_ids, match_category_ids. Actions: set_category_id "
+                "and/or set_merchant_name. apply_to_existing defaults to false; setting it true "
+                "rewrites matching past transactions."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "merchant_contains": {"type": "string", "description": "Merchant name contains this text"},
+                    "merchant_equals": {"type": "string", "description": "Merchant name equals this text"},
+                    "use_original_statement": {
+                        "type": "boolean",
+                        "description": "Match the raw bank statement text instead of the merchant name",
+                        "default": False
+                    },
+                    "amount": {
+                        "type": "object",
+                        "description": "Amount condition, e.g. {operator: 'gt', value: 80}",
+                        "properties": {
+                            "operator": {"type": "string", "enum": ["eq", "gt", "lt", "between"]},
+                            "value": {"type": "number"},
+                            "lower": {"type": "number"},
+                            "upper": {"type": "number"},
+                            "is_expense": {"type": "boolean", "default": True}
+                        },
+                        "required": ["operator"],
+                        "additionalProperties": False
+                    },
+                    "account_ids": {"type": "array", "items": {"type": "string"}},
+                    "match_category_ids": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Only match transactions currently in these categories"
+                    },
+                    "set_category_id": {"type": "string", "description": "Category to assign"},
+                    "set_merchant_name": {"type": "string", "description": "Merchant name to assign"},
+                    "apply_to_existing": {"type": "boolean", "default": False}
+                },
+                "additionalProperties": False
+            }
+        ),
+        Tool(
+            name="delete_transaction_rule",
+            description="Delete a transaction rule by id (use list_transaction_rules to find it)",
+            inputSchema={
+                "type": "object",
+                "properties": {"rule_id": {"type": "string"}},
+                "required": ["rule_id"],
                 "additionalProperties": False
             }
         ),
@@ -271,14 +516,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         elif name == "get_transactions":
             # Build filter parameters
             filters = {}
-            if "start_date" in arguments:
-                filters["start_date"] = datetime.strptime(arguments["start_date"], "%Y-%m-%d").date()
-            if "end_date" in arguments:
-                filters["end_date"] = datetime.strptime(arguments["end_date"], "%Y-%m-%d").date()
-            if "account_id" in arguments:
-                filters["account_id"] = arguments["account_id"]
-            if "category_id" in arguments:
-                filters["category_id"] = arguments["category_id"]
+            start = parse_date_arg(arguments, "start_date")
+            end = parse_date_arg(arguments, "end_date")
+            require_date_pair(start, end)
+            if start:
+                filters["start_date"] = start
+                filters["end_date"] = end
+            # The library takes lists of IDs (account_ids / category_ids)
+            if arguments.get("account_id"):
+                filters["account_ids"] = [arguments["account_id"]]
+            if arguments.get("category_id"):
+                filters["category_ids"] = [arguments["category_id"]]
             
             transactions = await mm_client.get_transactions(
                 limit=arguments.get("limit", 100),
@@ -291,10 +539,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         
         elif name == "get_budgets":
             kwargs = {}
-            if "start_date" in arguments:
-                kwargs["start_date"] = datetime.strptime(arguments["start_date"], "%Y-%m-%d").date()
-            if "end_date" in arguments:
-                kwargs["end_date"] = datetime.strptime(arguments["end_date"], "%Y-%m-%d").date()
+            start = parse_date_arg(arguments, "start_date")
+            end = parse_date_arg(arguments, "end_date")
+            require_date_pair(start, end)
+            if start:
+                kwargs["start_date"] = start
+                kwargs["end_date"] = end
             
             try:
                 budgets = await mm_client.get_budgets(**kwargs)
@@ -314,10 +564,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         
         elif name == "get_cashflow":
             kwargs = {}
-            if "start_date" in arguments:
-                kwargs["start_date"] = datetime.strptime(arguments["start_date"], "%Y-%m-%d").date()
-            if "end_date" in arguments:
-                kwargs["end_date"] = datetime.strptime(arguments["end_date"], "%Y-%m-%d").date()
+            start = parse_date_arg(arguments, "start_date")
+            end = parse_date_arg(arguments, "end_date")
+            require_date_pair(start, end)
+            if start:
+                kwargs["start_date"] = start
+                kwargs["end_date"] = end
             
             cashflow = await mm_client.get_cashflow(**kwargs)
             # Convert date objects to strings before serialization
@@ -332,15 +584,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
         
         elif name == "create_transaction":
             # Convert date string to date object
-            transaction_date = datetime.strptime(arguments["date"], "%Y-%m-%d").date()
-            
             result = await mm_client.create_transaction(
-                amount=arguments["amount"],
-                description=arguments["description"],
-                category_id=arguments.get("category_id"),
+                date=parse_date_arg(arguments, "date"),
                 account_id=arguments["account_id"],
-                date=transaction_date,
-                notes=arguments.get("notes")
+                amount=arguments["amount"],
+                merchant_name=arguments["description"],
+                category_id=arguments["category_id"],
+                notes=arguments.get("notes") or "",
             )
             # Convert date objects to strings before serialization
             result = convert_dates_to_strings(result)
@@ -352,11 +602,11 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
             if "amount" in arguments:
                 updates["amount"] = arguments["amount"]
             if "description" in arguments:
-                updates["description"] = arguments["description"]
+                updates["merchant_name"] = arguments["description"]
             if "category_id" in arguments:
                 updates["category_id"] = arguments["category_id"]
             if "date" in arguments:
-                updates["date"] = datetime.strptime(arguments["date"], "%Y-%m-%d").date()
+                updates["date"] = parse_date_arg(arguments, "date")
             if "notes" in arguments:
                 updates["notes"] = arguments["notes"]
             
@@ -365,6 +615,87 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
             result = convert_dates_to_strings(result)
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
         
+        elif name == "set_budget_amounts":
+            start = parse_date_arg(arguments, "start_date")
+            if start:
+                start = start[:8] + "01"  # budgets are keyed by the first of the month
+            apply_to_future = bool(arguments.get("apply_to_future", False))
+
+            results = []
+            for item in arguments["items"]:
+                category_id = item.get("category_id") or None
+                group_id = item.get("category_group_id") or None
+                entry = {"category_id": category_id, "category_group_id": group_id,
+                         "amount": item["amount"]}
+                if (category_id is None) == (group_id is None):
+                    entry.update(ok=False, error="Provide exactly one of category_id or category_group_id")
+                    results.append(entry)
+                    continue
+                try:
+                    resp = await mm_client.set_budget_amount(
+                        amount=item["amount"],
+                        category_id=category_id,
+                        category_group_id=group_id,
+                        start_date=start,
+                        apply_to_future=apply_to_future,
+                    )
+                    entry.update(ok=True, response=resp)
+                except Exception as e:
+                    entry.update(ok=False, error=str(e))
+                results.append(entry)
+
+            summary = {
+                "start_date": start or "current month",
+                "apply_to_future": apply_to_future,
+                "succeeded": sum(1 for r in results if r["ok"]),
+                "failed": sum(1 for r in results if not r["ok"]),
+                "results": results,
+            }
+            return [TextContent(type="text", text=json.dumps(convert_dates_to_strings(summary), indent=2))]
+
+        elif name == "list_transaction_rules":
+            result = await mm_client.gql_call(
+                operation="GetTransactionRules", graphql_query=GET_RULES, variables={}
+            )
+            return [TextContent(type="text", text=json.dumps(convert_dates_to_strings(result), indent=2))]
+
+        elif name == "create_transaction_rule":
+            rule_input = build_rule_input(arguments)
+            result = await mm_client.gql_call(
+                operation="Common_CreateTransactionRuleMutationV2",
+                graphql_query=CREATE_RULE,
+                variables={"input": rule_input},
+            )
+            payload = (result or {}).get("createTransactionRuleV2") or {}
+            raise_payload_errors(payload.get("errors"), "Rule creation")
+            return [TextContent(type="text", text=json.dumps({
+                "created": payload.get("transactionRule"),
+                "input": rule_input,
+            }, indent=2))]
+
+        elif name == "delete_transaction_rule":
+            result = await mm_client.gql_call(
+                operation="Common_DeleteTransactionRule",
+                graphql_query=DELETE_RULE,
+                variables={"id": arguments["rule_id"]},
+            )
+            payload = (result or {}).get("deleteTransactionRule") or {}
+            raise_payload_errors(payload.get("errors"), "Rule deletion")
+            # Monarch's `deleted` flag isn't reliable (it can come back false on
+            # success), so confirm by checking whether the rule still exists.
+            rules = await mm_client.gql_call(
+                operation="GetTransactionRules", graphql_query=GET_RULES, variables={}
+            )
+            still_there = any(
+                r.get("id") == arguments["rule_id"]
+                for r in (rules or {}).get("transactionRules") or []
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "rule_id": arguments["rule_id"],
+                "deleted": not still_there,
+                "api_deleted_flag": payload.get("deleted"),
+            }, indent=2))]
+
         elif name == "refresh_accounts":
             result = await mm_client.request_accounts_refresh()
             # Convert date objects to strings before serialization
