@@ -356,6 +356,30 @@
       "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
     },
     {
+      "name": "search_property_values",
+      "description": "Look up Zillow property matches and their Zestimates by address."
+    },
+    {
+      "name": "search_vehicle_values",
+      "description": "Look up a vehicle and its estimated value by VIN."
+    },
+    {
+      "name": "get_deleted_accounts",
+      "description": "List deleted accounts that undelete_account can restore."
+    },
+    {
+      "name": "create_real_estate_account",
+      "description": "Add a property whose value Monarch keeps updated from Zillow."
+    },
+    {
+      "name": "create_vehicle_account",
+      "description": "Add a vehicle whose value Monarch keeps updated by VIN."
+    },
+    {
+      "name": "undelete_account",
+      "description": "Restore a deleted account (see get_deleted_accounts)."
+    },
+    {
       "name": "get_household_members",
       "description": "List household members (IDs for owner_user_id)."
     },

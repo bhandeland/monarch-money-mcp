@@ -648,3 +648,74 @@ GET_RECURRING_REMAINING_DUE = gql("""
         }
     }
 """)
+
+
+# ---------------------------------------------------------------------------
+# Assets and restore
+# ---------------------------------------------------------------------------
+GET_ZESTIMATES = gql("""
+    query Web_GetZestimate($address: String!, $limit: Int) {
+        zestimates(address: $address, limit: $limit) {
+            zpid
+            addressStreet
+            addressCity
+            addressStateAbbr
+            addressPostalCode
+            zestimate
+        }
+    }
+""")
+
+SEARCH_VEHICLES = gql("""
+    query VehiclesSearch($search: String!, $limit: Int) {
+        vehicles(search: $search, limit: $limit) {
+            vin
+            name
+            value
+        }
+    }
+""")
+
+# The web app's institution settings list deleted accounts this way.
+GET_ACCOUNTS_INCLUDING_DELETED = gql("""
+    query Web_GetDeletedAccounts {
+        accounts(filters: {includeDeleted: true, includeHidden: true}) {
+            id
+            displayName
+            deletedAt
+            dataProvider
+            isManual
+            displayBalance
+            type { name display }
+            subtype { name display }
+            institution { id name }
+        }
+    }
+""")
+
+CREATE_REAL_ESTATE_ACCOUNT = gql("""
+    mutation Web_CreateZillowAccount($input: CreateSyncedRealEstateAccountInput!) {
+        createSyncedRealEstateAccount(input: $input) {
+            account { id }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+CREATE_VEHICLE_ACCOUNT = gql("""
+    mutation CreateSyncedVehicleAccount($input: CreateSyncedVehicleAccountInput!) {
+        createSyncedVehicleAccount(input: $input) {
+            account { id }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+UNDELETE_ACCOUNT = gql("""
+    mutation Common_UndeleteAccount($input: UndeleteAccountMutationInput!) {
+        undeleteAccount(input: $input) {
+            undeleted
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
