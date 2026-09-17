@@ -648,3 +648,447 @@ GET_RECURRING_REMAINING_DUE = gql("""
         }
     }
 """)
+
+
+# ---------------------------------------------------------------------------
+# Forecasting and paychecks
+# ---------------------------------------------------------------------------
+DEBT_PAYDOWN_METHODS = ["avalanche", "snowball", "planned"]
+FORECAST_DOLLAR_MODES = ["todaysDollars", "futureDollars"]
+PAYROLL_PROVIDERS = [
+    "adp", "bamboohr", "cloudpay", "deel", "gusto", "homebase", "insperity", "justworks",
+    "onpay", "other", "papaya_global", "patriot", "paychex", "paycom", "paycor", "paylocity",
+    "quickbooks", "remote", "rippling", "square", "surepayroll", "trinet", "ukg",
+    "velocity_global", "wave", "zenefits",
+]
+PAYCHECK_DEDUCTION_TYPES = [
+    "federal_income_tax", "state_income_tax", "city_income_tax", "social_security_tax",
+    "medicare_tax", "state_disability_insurance", "traditional_401k", "roth_401k",
+    "loan_repayment_401k", "plan_403b", "plan_457b", "mandatory_public_retirement", "espp",
+    "medical_insurance", "dental_insurance", "vision_insurance", "life_insurance",
+    "group_term_life", "disability_insurance", "hsa_payroll", "healthcare_fsa",
+    "dependent_care_fsa", "transit_pass", "union_dues", "charitable_contributions",
+    "child_support", "creditor_garnishment", "student_loan_garnishment", "tax_levy",
+    "company_reimbursement", "salary_advance_repayment", "custom",
+]
+
+GET_CASH_FLOW_PROJECTION = gql("""
+    query Common_GetCashFlowProjection(
+        $accountId: ID!
+        $startDate: Date
+        $endDate: Date
+        $days: Int
+    ) {
+        cashFlowProjection(
+            accountId: $accountId
+            startDate: $startDate
+            endDate: $endDate
+            days: $days
+        ) {
+            account { id displayName displayBalance isAsset targetThreshold effectiveThreshold }
+            startDate
+            endDate
+            startingBalance
+            dailyBalances { date startingBalance endingBalance balance netChange isOverdraft }
+            virtualTransactions {
+                id
+                date
+                amount
+                description
+                isRecurring
+                confidence
+                streamType
+                merchant { id name }
+                category { id name }
+            }
+            overdraftDates
+            lowestBalance
+            lowestBalanceDate
+            safeToSpend
+        }
+    }
+""")
+
+FORECAST_SCENARIO_LIST_ITEM = """
+    fragment ForecastScenarioListItemFields on ForecastScenarioListItemType {
+        externalId
+        name
+        icon
+        color
+        order
+        kpis
+    }
+"""
+
+FORECAST_CATEGORY_VERSIONS = """
+    fragment ForecastCategoryVersionsAllFields on ForecastCategoryVersionsType {
+        settingsVersion
+        eventsVersion
+        accountsVersion
+        participantsVersion
+        priorityRulesVersion
+    }
+"""
+
+FORECAST_SCENARIO = """
+    fragment ForecastScenarioFields on ForecastScenarioType {
+        externalId
+        name
+        icon
+        color
+        inflationRate
+        projectionYears
+        useActualsAsBaseline
+        splitUncategorizedSavings
+        dollarMode
+        monteCarloEnabled
+        accounts {
+            externalId
+            monarchAccountId
+            name
+            signedBalance
+            accountType
+            accountSubtype
+            isSynthetic
+            isIncluded
+            growthRate
+            growthRateMethod
+            interestRate
+            plannedPayment
+            minimumPayment
+            withdrawalTaxRate
+            withdrawalStartingYear
+            yearlyPaycheckContribution
+            ownerUserId
+        }
+        participants {
+            user { id displayName birthday }
+            lifeExpectancy
+            isIncluded
+        }
+        events {
+            externalId
+            eventKind
+            name
+            startYear
+            isIncluded
+            isHidden
+            isRequired
+            config
+        }
+        priorityRules { accountExternalId componentKind ruleType order config }
+        categoryVersions { ...ForecastCategoryVersionsAllFields }
+        baselineIncome
+        baselineExpenses
+        compareToScenarioExternalId
+    }
+""" + FORECAST_CATEGORY_VERSIONS
+
+GET_FORECAST_SCENARIOS = gql("""
+    query Web_ForecastScenarios {
+        forecastScenarios {
+            ...ForecastScenarioListItemFields
+        }
+    }
+""" + FORECAST_SCENARIO_LIST_ITEM)
+
+GET_FORECAST_SCENARIO = gql("""
+    query Web_ForecastScenario($externalId: ID) {
+        forecastScenario(externalId: $externalId) {
+            ...ForecastScenarioFields
+        }
+    }
+""" + FORECAST_SCENARIO)
+
+# updateForecastScenario needs the scenario's current settings version.
+GET_FORECAST_SCENARIO_SETTINGS_VERSION = gql("""
+    query Common_ForecastScenarioSettingsVersion($externalId: ID) {
+        forecastScenario(externalId: $externalId) {
+            externalId
+            categoryVersions { settingsVersion }
+        }
+    }
+""")
+
+CREATE_FORECAST_SCENARIO = gql("""
+    mutation Web_CreateForecastScenario($input: CreateForecastScenarioInput!) {
+        createForecastScenario(input: $input) {
+            scenario {
+                ...ForecastScenarioFields
+            }
+            errors {
+                message
+            }
+        }
+    }
+""" + FORECAST_SCENARIO)
+
+UPDATE_FORECAST_SCENARIO = gql("""
+    mutation Web_UpdateForecastScenario($input: UpdateForecastScenarioInput!) {
+        updateForecastScenario(input: $input) {
+            newVersion
+            scenario {
+                externalId
+                name
+                icon
+                color
+                inflationRate
+                projectionYears
+                useActualsAsBaseline
+                splitUncategorizedSavings
+                dollarMode
+                categoryVersions { ...ForecastCategoryVersionsAllFields }
+            }
+            errors {
+                ...PayloadErrorFields
+            }
+        }
+    }
+""" + FORECAST_CATEGORY_VERSIONS + PAYLOAD_ERRORS)
+
+DUPLICATE_FORECAST_SCENARIO = gql("""
+    mutation Web_DuplicateForecastScenario($input: DuplicateForecastScenarioInput!) {
+        duplicateForecastScenario(input: $input) {
+            scenario {
+                ...ForecastScenarioFields
+            }
+            errors {
+                ...PayloadErrorFields
+            }
+        }
+    }
+""" + FORECAST_SCENARIO + PAYLOAD_ERRORS)
+
+DELETE_FORECAST_SCENARIO = gql("""
+    mutation Web_DeleteForecastScenario($input: DeleteForecastScenarioInput!) {
+        deleteForecastScenario(input: $input) {
+            deleted
+            deletedScenarioExternalId
+            errors {
+                ...PayloadErrorFields
+            }
+            scenarios {
+                ...ForecastScenarioListItemFields
+            }
+        }
+    }
+""" + FORECAST_SCENARIO_LIST_ITEM + PAYLOAD_ERRORS)
+
+DEBT_ACCOUNT = """
+    fragment DebtAccountFields on Account {
+        id
+        displayName
+        displayBalance
+        includeInNetWorth
+        isHidden
+        displayLastUpdatedAt
+        apr
+        interestRate
+        minimumPayment
+        plannedPayment
+        excludeFromDebtPaydown
+        type { name display }
+        subtype { name display }
+    }
+"""
+
+GET_DEBT_ACCOUNTS = gql("""
+    query Common_DebtPaydownAccounts {
+        debtAccounts {
+            id
+            ...DebtAccountFields
+        }
+    }
+""" + DEBT_ACCOUNT)
+
+GET_DEBT_PAYDOWN_PLAN = gql("""
+    query Common_DebtPaydown($input: SavingsCalculatorInput!) {
+        debtAccounts {
+            id
+            ...DebtAccountFields
+        }
+        debtProjectionForecastLimit
+        debtPaydownPlan(input: $input) {
+            currentDebtPrincipal
+            projectedInterest
+            adjustedProjectedInterest
+            projectedTotal
+            adjustedProjectedTotal
+            debtFreeDate
+            adjustedDebtFreeDate
+            debtAccountProjections {
+                account { id displayName }
+                principal
+                projectedInterest
+                projectedTotal
+                debtFreeDate
+            }
+        }
+    }
+""" + DEBT_ACCOUNT)
+
+GET_DEBT_PAYDOWN_BUDGET_AMOUNTS = gql("""
+    query Common_DebtPaydownMonthlyBudgetAmounts($startMonth: Date!, $endMonth: Date!) {
+        debtPaydownMonthlyBudgetAmounts(startMonth: $startMonth, endMonth: $endMonth) {
+            id
+            account { id displayName displayBalance }
+            monthlyAmounts { id month plannedAmount actualAmount remainingAmount }
+        }
+    }
+""")
+
+SET_DEBT_PAYDOWN_BUDGET_AMOUNT = gql("""
+    mutation Common_SetDebtPaydownBudgetAmount($input: SetDebtPaydownBudgetAmountInput!) {
+        setDebtPaydownBudgetAmount(input: $input) {
+            success
+            errors {
+                ...PayloadErrorFields
+            }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+PAYCHECK = """
+    fragment PaycheckFields on Paycheck {
+        id
+        employer { id name }
+        employerName
+        payrollProvider
+        payDate
+        payPeriodStart
+        payPeriodEnd
+        grossAmount
+        createdAt
+        isMagicImported
+        owner { id name }
+        createdBy { id name }
+        deductions { id deductionType customDeductionName amount }
+        deposits {
+            id
+            transaction {
+                id
+                amount
+                date
+                merchant { id name }
+                account { id displayName }
+            }
+        }
+    }
+"""
+
+GET_PAYCHECKS = gql("""
+    query Common_GetPaychecks($startDate: Date, $endDate: Date, $ownerId: ID, $employerId: ID) {
+        paychecks(
+            startDate: $startDate
+            endDate: $endDate
+            ownerId: $ownerId
+            employerId: $employerId
+        ) {
+            ...PaycheckFields
+        }
+    }
+""" + PAYCHECK)
+
+GET_PAYCHECK = gql("""
+    query Common_GetPaycheck($id: ID!) {
+        paycheck(id: $id) {
+            ...PaycheckFields
+        }
+    }
+""" + PAYCHECK)
+
+GET_PAYCHECKS_SUMMARY = gql("""
+    query Common_GetPaychecksSummary(
+        $startDate: Date
+        $endDate: Date
+        $ownerIds: [ID!]
+        $employerId: ID
+    ) {
+        paychecksSummary(
+            startDate: $startDate
+            endDate: $endDate
+            ownerIds: $ownerIds
+            employerId: $employerId
+        ) {
+            count
+            totalGross
+            totalDeductions
+            totalNet
+            deductionRate
+            deductionsByType { deductionType totalAmount }
+        }
+    }
+""")
+
+GET_PAYCHECK_EMPLOYERS = gql("""
+    query Common_GetPaycheckEmployers($search: String, $limit: Int, $offset: Int) {
+        paycheckEmployers(search: $search, limit: $limit, offset: $offset) {
+            id name paycheckCount createdAt
+        }
+        paycheckEmployerCount
+    }
+""")
+
+CREATE_PAYCHECK = gql("""
+    mutation Common_CreatePaycheck($input: CreatePaycheckInput!) {
+        createPaycheck(input: $input) {
+            paycheck {
+                ...PaycheckFields
+            }
+            errors {
+                ...PayloadErrorFields
+            }
+        }
+    }
+""" + PAYCHECK + PAYLOAD_ERRORS)
+
+UPDATE_PAYCHECK = gql("""
+    mutation Common_UpdatePaycheck($input: UpdatePaycheckInput!) {
+        updatePaycheck(input: $input) {
+            paycheck {
+                ...PaycheckFields
+            }
+            errors {
+                ...PayloadErrorFields
+            }
+        }
+    }
+""" + PAYCHECK + PAYLOAD_ERRORS)
+
+DELETE_PAYCHECK = gql("""
+    mutation Common_DeletePaycheck($input: DeletePaycheckInput!) {
+        deletePaycheck(input: $input) {
+            success
+            errors {
+                ...PayloadErrorFields
+            }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+CREATE_PAYCHECK_EMPLOYER = gql("""
+    mutation Common_CreatePaycheckEmployer($input: CreatePaycheckEmployerInput!) {
+        createPaycheckEmployer(input: $input) {
+            employer { id name paycheckCount createdAt }
+            errors { message }
+        }
+    }
+""")
+
+UPDATE_PAYCHECK_EMPLOYER = gql("""
+    mutation Common_UpdatePaycheckEmployer($input: UpdatePaycheckEmployerInput!) {
+        updatePaycheckEmployer(input: $input) {
+            employer { id name paycheckCount createdAt }
+            errors { message }
+        }
+    }
+""")
+
+DELETE_PAYCHECK_EMPLOYER = gql("""
+    mutation Common_DeletePaycheckEmployer($id: ID!) {
+        deletePaycheckEmployer(id: $id) {
+            success
+            errors { message }
+        }
+    }
+""")
