@@ -356,6 +356,54 @@
       "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
     },
     {
+      "name": "get_business_entities",
+      "description": "List the household's businesses, with their linked accounts and transaction counts."
+    },
+    {
+      "name": "get_business_entity",
+      "description": "Get one business."
+    },
+    {
+      "name": "get_business_entity_financials",
+      "description": "Income, expenses, and net assets per business for a date range, with monthly breakdowns."
+    },
+    {
+      "name": "get_business_entity_summaries",
+      "description": "Transaction totals per business for a date range (income, expenses, savings)."
+    },
+    {
+      "name": "create_business_entity",
+      "description": "Create a business, to track its accounts and transactions separately."
+    },
+    {
+      "name": "update_business_entity",
+      "description": "Update a business's details."
+    },
+    {
+      "name": "delete_business_entity",
+      "description": "Delete a business."
+    },
+    {
+      "name": "set_account_business_entity",
+      "description": "Assign accounts to a business, or leave business_entity_id out to unassign them."
+    },
+    {
+      "name": "get_schedule_c_line_items",
+      "description": "List the IRS Schedule C line items Monarch can map categories to."
+    },
+    {
+      "name": "get_schedule_c_category_mappings",
+      "description": "List which categories map to which Schedule C lines."
+    },
+    {
+      "name": "set_schedule_c_category_mapping",
+      "description": "Map a category to a Schedule C line for a tax year (replaces its existing mapping)."
+    },
+    {
+      "name": "delete_schedule_c_category_mapping",
+      "description": "Remove a category's Schedule C mapping for a tax year."
+    },
+    {
       "name": "get_household_members",
       "description": "List household members (IDs for owner_user_id)."
     },

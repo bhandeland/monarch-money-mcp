@@ -648,3 +648,205 @@ GET_RECURRING_REMAINING_DUE = gql("""
         }
     }
 """)
+
+
+# ---------------------------------------------------------------------------
+# Business entities and Schedule C
+# ---------------------------------------------------------------------------
+BUSINESS_ENTITY_STRUCTURES = [
+    "sole_proprietorship", "llc", "llp", "lp", "partnership", "s_corp", "c_corp",
+    "nonprofit", "trust", "estate", "other",
+]
+SCHEDULE_C_LINE_ITEMS = [
+    "line_1_gross_receipts", "line_2_returns_allowances", "line_3_net_part_i",
+    "line_4_cost_of_goods", "line_5_gross_profit", "line_6_other_income",
+    "line_8_advertising", "line_9_car_truck", "line_10_commissions_fees",
+    "line_11_contract_labor", "line_12_depletion", "line_13_depreciation",
+    "line_14_employee_benefits", "line_15_insurance", "line_16a_mortgage_interest",
+    "line_16b_other_interest", "line_17_legal_professional", "line_18_office_expense",
+    "line_19_pension_profit_sharing", "line_20a_rent_vehicles_equipment",
+    "line_20b_rent_other_property", "line_21_repairs_maintenance", "line_22_supplies",
+    "line_23_taxes_licenses", "line_24a_travel", "line_24b_meals", "line_25_utilities",
+    "line_26_wages", "line_27a_energy_efficient", "line_27b_other_expenses",
+]
+
+BUSINESS_ENTITY_FIELDS = """
+    fragment BusinessEntityFields on BusinessEntity {
+        id
+        name
+        description
+        logoUrl
+        color
+        notes
+        structure
+        createdAt
+        updatedAt
+        accounts { id logoUrl displayName }
+        accountsCount
+        transactionsCount
+    }
+"""
+
+REPORTS_SUMMARY_FIELDS = """
+    fragment ReportsSummaryFields on TransactionsSummary {
+        sum
+        avg
+        count
+        max
+        sumIncome
+        sumExpense
+        savings
+        savingsRate
+        first
+        last
+    }
+"""
+
+GET_BUSINESS_ENTITIES = gql("""
+    query Common_GetBusinessEntities {
+        businessEntities { ...BusinessEntityFields }
+    }
+""" + BUSINESS_ENTITY_FIELDS)
+
+GET_BUSINESS_ENTITIES_SUMMARY = gql("""
+    query Common_GetBusinessEntitiesSummary {
+        businessEntities { id name logoUrl color }
+    }
+""")
+
+GET_BUSINESS_ENTITY = gql("""
+    query Common_GetBusinessEntity($id: ID!) {
+        businessEntity(id: $id) { ...BusinessEntityFields }
+    }
+""" + BUSINESS_ENTITY_FIELDS)
+
+GET_BUSINESS_ENTITY_FINANCIALS = gql("""
+    query Common_GetBusinessEntityFinancials($entityIds: [ID!]!, $startDate: Date!, $endDate: Date!) {
+        businessEntityFinancials(entityIds: $entityIds, startDate: $startDate, endDate: $endDate) {
+            entityId
+            sumIncome
+            sumExpense
+            netAssets
+            monthlyBreakdown { month sumIncome sumExpense }
+            monthlyNetAssets { month netAssets }
+        }
+    }
+""")
+
+# The web app only asks for businessEntitySummaries as part of the by-category
+# report below; this is that part on its own.
+GET_BUSINESS_ENTITY_SUMMARIES = gql("""
+    query Common_GetBusinessEntitySummaries($filters: TransactionFilterInput!) {
+        businessEntitySummaries(filters: $filters) {
+            businessEntity { id name color logoUrl }
+            summary { ...ReportsSummaryFields }
+        }
+    }
+""" + REPORTS_SUMMARY_FIELDS)
+
+GET_BUSINESS_ENTITY_REPORT_BY_CATEGORY = gql("""
+    query Common_GetBusinessEntityReportsDataByCategory($filters: TransactionFilterInput!) {
+        reports(groupBy: [business_entity, category], filters: $filters, fillEmptyValues: false) {
+            groupBy {
+                businessEntity { id name color logoUrl }
+                category {
+                    id
+                    name
+                    icon
+                    group { id name type }
+                }
+            }
+            summary { ...ReportsSummaryFields }
+        }
+        businessEntitySummaries(filters: $filters) {
+            businessEntity { id name color logoUrl }
+            summary { ...ReportsSummaryFields }
+        }
+        aggregates(filters: $filters, fillEmptyValues: false) {
+            summary { ...ReportsSummaryFields }
+        }
+    }
+""" + REPORTS_SUMMARY_FIELDS)
+
+UPSERT_BUSINESS_ENTITY = gql("""
+    mutation Common_UpsertBusinessEntity($input: UpsertBusinessEntityInput!) {
+        upsertBusinessEntity(input: $input) {
+            businessEntity { ...BusinessEntityFields }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + BUSINESS_ENTITY_FIELDS + PAYLOAD_ERRORS)
+
+DELETE_BUSINESS_ENTITY = gql("""
+    mutation Common_DeleteBusinessEntity($id: ID!) {
+        deleteBusinessEntity(id: $id) {
+            deleted
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+UPDATE_ACCOUNTS_BUSINESS_ENTITY = gql("""
+    mutation Common_UpdateAccountsForEditingEntities($input: [UpdateAccountsMutationInput!]!) {
+        updateAccounts(input: $input) {
+            accounts {
+                id
+                displayName
+                businessEntity { id name }
+            }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+GET_SCHEDULE_C_LINE_ITEMS = gql("""
+    query Web_GetScheduleCLineItems($taxYear: Int!) {
+        scheduleCLineItems(taxYear: $taxYear) {
+            key
+            lineNumber
+            description
+            lineType
+            sortOrder
+            isNotTracked
+            displayInfo
+        }
+    }
+""")
+
+GET_TAX_SCHEDULE_CATEGORY_MAPPINGS = gql("""
+    query Web_GetTaxScheduleCategoryMappings($schedule: TaxSchedule!, $taxYear: Int!) {
+        taxScheduleCategoryMappings(schedule: $schedule, taxYear: $taxYear) {
+            id
+            lineItem
+            schedule
+            taxYear
+            category { id name icon }
+            lineItemInfo { key lineNumber description lineType sortOrder }
+        }
+    }
+""")
+
+ASSIGN_TAX_SCHEDULE_CATEGORY_MAPPING = gql("""
+    mutation Web_AssignTaxScheduleCategoryMapping($input: AssignTaxScheduleCategoryMappingInput!) {
+        assignTaxScheduleCategoryMapping(input: $input) {
+            taxScheduleCategoryMapping {
+                id
+                lineItem
+                schedule
+                taxYear
+                category { id name }
+                lineItemInfo { key lineNumber description lineType sortOrder }
+            }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+DELETE_TAX_SCHEDULE_CATEGORY_MAPPING = gql("""
+    mutation Web_DeleteTaxScheduleCategoryMapping($input: DeleteTaxScheduleCategoryMappingInput!) {
+        deleteTaxScheduleCategoryMapping(input: $input) {
+            deleted
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
