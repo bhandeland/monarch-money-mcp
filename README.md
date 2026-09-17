@@ -17,40 +17,82 @@ Forked from [colvint/monarch-money-mcp](https://github.com/colvint/monarch-money
 
 ## Installation
 
-1. Clone or download this MCP server
-2. Install dependencies:
-   ```bash
-   cd /path/to/monarch-money-mcp
-   uv sync
-   ```
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/). It runs the server and installs its dependencies, including Python if you don't have it.
 
-## Configuration
+- **macOS / Linux**: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`)
+- **Windows** (PowerShell): `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"` (or `winget install --id=astral-sh.uv -e`)
+
+Open a new terminal afterwards so `uv` is on your PATH. There's nothing to clone - the commands below fetch the server from GitHub.
 
 ### 1. Log in once
 
 ```bash
-uv run monarch-money-mcp login
+uvx --from git+https://github.com/bhandeland/monarch-money-mcp monarch-money-mcp login
 ```
 
-This asks for your email, password, and MFA code, then saves only the session token to `~/.config/monarch-money-mcp/session.json` (readable only by you). Your password and MFA secret aren't stored anywhere.
+This asks for your email, password, and MFA code, then saves only the session token to `~/.config/monarch-money-mcp/session.json` (`%USERPROFILE%\.config\monarch-money-mcp\session.json` on Windows), readable only by you. Your password and MFA secret aren't stored anywhere.
 
-### 2. Add the server to your `.mcp.json`
+If the token stops working, the server's tools return an error asking you to run `login` again.
+
+### 2. Add the server to your client
+
+**Claude Desktop:**
+
+```bash
+uvx --from git+https://github.com/bhandeland/monarch-money-mcp monarch-money-mcp install --client claude-desktop
+```
+
+This adds a `monarch-money` entry to Claude Desktop's config and leaves everything else in it alone. Restart Claude Desktop afterwards. The config file is at:
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+**Claude Code:**
+
+```bash
+uvx --from git+https://github.com/bhandeland/monarch-money-mcp monarch-money-mcp install --client claude-code
+```
+
+This runs `claude mcp add --scope user`, so the server is available in every project. If `claude` isn't on your PATH, it prints the command to run instead.
+
+**Anything else** (Cursor, a project's `.mcp.json`, and so on):
+
+```bash
+uvx --from git+https://github.com/bhandeland/monarch-money-mcp monarch-money-mcp install --print
+```
+
+This prints the `mcpServers` JSON to paste into the client's config. It looks like this:
 
 ```json
 {
   "mcpServers": {
     "monarch-money": {
-      "command": "/path/to/uv",
-      "args": ["--directory", "/path/to/monarch-money-mcp", "run", "monarch-money-mcp"]
+      "command": "/full/path/to/uvx",
+      "args": ["--from", "git+https://github.com/bhandeland/monarch-money-mcp", "monarch-money-mcp"]
     }
   }
 }
 ```
 
-- Replace `/path/to/uv` with the full path to your `uv` executable (find it with `which uv`)
-- Replace `/path/to/monarch-money-mcp` with the absolute path to this server directory
+The config uses the full path to `uvx` because desktop apps don't see your shell's PATH. To write it by hand, find that path with `which uvx` (macOS / Linux) or `where.exe uvx` (Windows).
 
-If the token stops working, the server's tools return an error asking you to run `login` again.
+`install` never writes your email, password, or MFA secret into a config file.
+
+### Running from a clone
+
+If you cloned this repository (to develop on it, or to pin a version), run the same commands with `uv run` from the clone:
+
+```bash
+cd /path/to/monarch-money-mcp
+uv sync
+uv run monarch-money-mcp login
+uv run monarch-money-mcp install --client claude-desktop
+```
+
+Run from a clone, `install` points the client at that clone (`uv --directory /path/to/monarch-money-mcp run monarch-money-mcp`) instead of GitHub.
 
 ### Environment variables (all optional)
 
@@ -111,10 +153,13 @@ Show me my current budget status using the get_budgets tool.
 
 ## Troubleshooting
 
-- **"Not logged in" or "session expired"**: run `uv run monarch-money-mcp login`, then restart the server.
-- **Clear the saved session**: `uv run monarch-money-mcp logout`.
+The commands below use the short form `monarch-money-mcp <command>`. Put `uvx --from git+https://github.com/bhandeland/monarch-money-mcp` in front of it, or `uv run` from a clone.
+
+- **"Not logged in" or "session expired"**: run `monarch-money-mcp login`, then restart your client.
+- **Clear the saved session**: `monarch-money-mcp logout`.
 - **MFA problems with `MONARCH_MFA_SECRET`**: check the secret, and that your system clock is accurate (TOTP codes depend on it).
-- **See startup errors**: run the server directly with `uv run monarch-money-mcp`. Errors go to stderr.
+- **See startup errors**: run `monarch-money-mcp` on its own. Errors go to stderr. Claude Desktop also logs them, in `~/Library/Logs/Claude/` on macOS and `%APPDATA%\Claude\logs\` on Windows.
+- **Client can't find `uv` or `uvx`**: run `install` again after installing uv, or put the full path in the config yourself.
 
 Earlier versions saved the token as a pickle file in `~/.monarchmoney_session` (and the library in `.mm/`). Those are no longer read; `login` deletes them.
 

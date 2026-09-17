@@ -21,6 +21,7 @@ from monarchmoney import MonarchMoney
 from monarchmoney.monarchmoney import BalanceHistoryRow
 
 import auth
+import install
 import monarch_gql as q
 
 # Tool arguments and API responses are untyped JSON.
@@ -1280,7 +1281,14 @@ def main(argv: list[str] | None = None) -> None:
     commands.add_parser("serve", help="Run the MCP server over stdio (default)")
     commands.add_parser("login", help="Log in once and save only the session token")
     commands.add_parser("logout", help="Delete the saved session token")
-    command = parser.parse_args(argv).command
+    install_parser = commands.add_parser(
+        "install", help="Add the server to an MCP client, or print its config")
+    target = install_parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--client", choices=["claude-desktop", "claude-code"])
+    target.add_argument("--print", action="store_true",
+                        help="Print the mcpServers JSON for any other client")
+    args = parser.parse_args(argv)
+    command = args.command
 
     if command == "login":
         try:
@@ -1289,6 +1297,8 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(f"Login failed: {e}")
     elif command == "logout":
         logout()
+    elif command == "install":
+        install.install(args.client)
     else:
         asyncio.run(serve())
 

@@ -150,6 +150,23 @@ def test_main_dispatch(monkeypatch: pytest.MonkeyPatch, argv: list[str], expecte
     assert ran == [expected]
 
 
+@pytest.mark.parametrize("argv, expected", [
+    (["install", "--client", "claude-desktop"], "claude-desktop"),
+    (["install", "--client", "claude-code"], "claude-code"),
+    (["install", "--print"], None),
+])
+def test_main_install(monkeypatch: pytest.MonkeyPatch, argv: list[str], expected: str | None) -> None:
+    clients: list[str | None] = []
+    monkeypatch.setattr(server.install, "install", clients.append)
+    server.main(argv)
+    assert clients == [expected]
+
+
+def test_main_install_needs_a_target() -> None:
+    with pytest.raises(SystemExit):
+        server.main(["install"])
+
+
 def test_main_login_failure_exits(monkeypatch: pytest.MonkeyPatch) -> None:
     async def failing_login() -> None:
         raise auth.AuthError("bad password")
