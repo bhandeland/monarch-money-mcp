@@ -44,6 +44,14 @@ def raise_payload_errors(errors: dict[str, Any] | None, action: str) -> None:
         raise RuntimeError(f"{action} failed: {detail}")
 
 
+# Cheapest authenticated query; used to check that a token still works.
+GET_ME = gql("""
+    query Common_GetMe {
+        me { id }
+    }
+""")
+
+
 # ---------------------------------------------------------------------------
 # Transaction rules
 # ---------------------------------------------------------------------------

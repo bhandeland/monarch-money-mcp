@@ -26,41 +26,44 @@ Forked from [colvint/monarch-money-mcp](https://github.com/colvint/monarch-money
 
 ## Configuration
 
-Add the server to your `.mcp.json` configuration file:
+### 1. Log in once
+
+```bash
+uv run monarch-money-mcp login
+```
+
+This asks for your email, password, and MFA code, then saves only the session token to `~/.config/monarch-money-mcp/session.json` (readable only by you). Your password and MFA secret aren't stored anywhere.
+
+### 2. Add the server to your `.mcp.json`
 
 ```json
 {
   "mcpServers": {
     "monarch-money": {
       "command": "/path/to/uv",
-      "args": [
-        "--directory", 
-        "/path/to/monarch-money-mcp",
-        "run",
-        "python",
-        "server.py"
-      ],
-      "env": {
-        "MONARCH_EMAIL": "your-email@example.com",
-        "MONARCH_PASSWORD": "your-password",
-        "MONARCH_MFA_SECRET": "your-mfa-secret-key"
-      }
+      "args": ["--directory", "/path/to/monarch-money-mcp", "run", "monarch-money-mcp"]
     }
   }
 }
 ```
 
-**Important Notes:**
 - Replace `/path/to/uv` with the full path to your `uv` executable (find it with `which uv`)
 - Replace `/path/to/monarch-money-mcp` with the absolute path to this server directory
-- Use absolute paths, not relative paths
 
-### Getting Your MFA Secret
+If the token stops working, the server's tools return an error asking you to run `login` again.
 
-1. Go to Monarch Money settings and enable 2FA
-2. When shown the QR code, look for the "Can't scan?" or "Enter manually" option
-3. Copy the secret key (it will be a string like `T5SPVJIBRNPNNINFSH5W7RFVF2XYADYX`)
-4. Use this as your `MONARCH_MFA_SECRET`
+### Environment variables (all optional)
+
+| Variable | Purpose |
+|---|---|
+| `MONARCH_TOKEN` | Use this token instead of the saved session |
+| `MONARCH_SESSION_FILE` | Where `login` saves the token and the server reads it |
+| `MONARCH_EMAIL`, `MONARCH_PASSWORD`, `MONARCH_MFA_SECRET` | Log in automatically, and log in again when the token expires. This keeps your password and MFA secret in the MCP config, so only use it if unattended re-login matters to you. |
+| `MONARCH_FORCE_LOGIN` | With the credentials above, ignore the saved session and log in fresh |
+
+The server tries `MONARCH_TOKEN`, then the saved session, then the credentials.
+
+To get an MFA secret for `MONARCH_MFA_SECRET`, turn on 2FA in Monarch's settings and choose "Can't scan?" / "Enter manually" when the QR code is shown. The secret looks like `T5SPVJIBRNPNNINFSH5W7RFVF2XYADYX`.
 
 ## Available Tools
 
@@ -105,30 +108,14 @@ Get all transactions from January 2024 using get_transactions with start_date "2
 Show me my current budget status using the get_budgets tool.
 ```
 
-## Session Management
-
-The server automatically manages authentication sessions:
-- The session token is cached in `~/.monarchmoney_session` for faster subsequent logins
-- Use `MONARCH_FORCE_LOGIN=true` in the env section to force a fresh login if needed
-
 ## Troubleshooting
 
-### MFA Issues
-- Ensure your MFA secret is correct and properly formatted
-- Try setting `MONARCH_FORCE_LOGIN=true` in your `.mcp.json` env section
-- Check that your system time is accurate (required for TOTP)
+- **"Not logged in" or "session expired"**: run `uv run monarch-money-mcp login`, then restart the server.
+- **Clear the saved session**: `uv run monarch-money-mcp logout`.
+- **MFA problems with `MONARCH_MFA_SECRET`**: check the secret, and that your system clock is accurate (TOTP codes depend on it).
+- **See startup errors**: run the server directly with `uv run monarch-money-mcp`. Errors go to stderr.
 
-### Connection Issues
-- Verify your email and password are correct in `.mcp.json`
-- Check your internet connection
-- Try running the server directly to see detailed error messages:
-  ```bash
-  uv run server.py
-  ```
-
-### Session Problems
-- Run `./clear-sessions.sh` to clear cached sessions
-- Set `MONARCH_FORCE_LOGIN=true` in your `.mcp.json` env section temporarily
+Earlier versions saved the token as a pickle file in `~/.monarchmoney_session` (and the library in `.mm/`). Those are no longer read; `login` deletes them.
 
 ## Development
 
@@ -156,7 +143,7 @@ This MCP server wraps the monarchmoney Python library to provide seamless integr
 
 ## Security Notes
 
-- Keep your credentials secure in your `.mcp.json` file
+- Prefer `login` over putting your password in `.mcp.json`
 - The MFA secret provides full access to your account - treat it like a password
-- `~/.monarchmoney_session` contains an authentication token - keep it secure
-- Consider restricting access to your `.mcp.json` file since it contains sensitive credentials
+- The saved session file contains an authentication token - it's created readable only by you; `logout` deletes it
+- If you do put credentials in `.mcp.json`, restrict access to that file

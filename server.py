@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """MonarchMoney MCP Server - Provides access to Monarch Money financial data via MCP protocol."""
 
+import argparse
+import getpass
 import os
 import sys
 import asyncio
@@ -18,6 +20,7 @@ from mcp.types import ServerCapabilities, Tool, TextContent, ToolAnnotations
 from monarchmoney import MonarchMoney
 from monarchmoney.monarchmoney import BalanceHistoryRow
 
+import auth
 import monarch_gql as q
 
 # Tool arguments and API responses are untyped JSON.
@@ -91,44 +94,9 @@ def result(data: Any) -> list[TextContent]:
 # Initialize the MCP server
 server: Server[Any] = Server("monarch-money")
 
-# Global variable to store the MonarchMoney client
+# Set by serve() once authenticated; replaced when the token has to be renewed.
 mm_client: MonarchMoney | None = None
-session_file = Path.home() / ".monarchmoney_session"
-
-
-async def initialize_client() -> None:
-    """Initialize the MonarchMoney client with authentication."""
-    global mm_client
-
-    email = os.getenv("MONARCH_EMAIL")
-    password = os.getenv("MONARCH_PASSWORD")
-    mfa_secret = os.getenv("MONARCH_MFA_SECRET")
-
-    if not email or not password:
-        raise ValueError("MONARCH_EMAIL and MONARCH_PASSWORD environment variables are required")
-
-    mm_client = MonarchMoney()
-
-    # Try to load existing session first
-    if session_file.exists() and not os.getenv("MONARCH_FORCE_LOGIN"):
-        try:
-            mm_client.load_session(str(session_file))
-            # Test if session is still valid
-            await mm_client.get_accounts()
-            print("Loaded existing session successfully", file=sys.stderr)
-            return
-        except Exception:
-            print("Existing session invalid, logging in fresh", file=sys.stderr)
-
-    # Login with credentials
-    if mfa_secret:
-        await mm_client.login(email, password, mfa_secret_key=mfa_secret)
-    else:
-        await mm_client.login(email, password)
-
-    # Save session for future use
-    mm_client.save_session(str(session_file))
-    print("Logged in and saved session", file=sys.stderr)
+authenticator = auth.Authenticator(os.environ)
 
 
 # ---------------------------------------------------------------------------
@@ -946,16 +914,30 @@ async def call_tool(name: str, arguments: Args) -> list[TextContent]:
     if name not in TOOLS:
         return [TextContent(type="text", text=f"Error: Unknown tool '{name}'")]
 
+    handler = TOOLS[name][1]
     try:
-        return result(await TOOLS[name][1](mm_client, arguments or {}))
+        try:
+            return result(await handler(mm_client, arguments or {}))
+        except Exception as e:
+            if not auth.is_auth_error(e):
+                raise
+            # The token stopped working; log in again and retry once.
+            return result(await handler(await renew_client(mm_client), arguments or {}))
     except Exception as e:
         return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
 
 
+async def renew_client(stale: MonarchMoney) -> MonarchMoney:
+    global mm_client
+    mm_client = await authenticator.renew(stale)
+    return mm_client
+
+
 async def serve() -> None:
     """Authenticate, then run the MCP server over stdio."""
+    global mm_client
     try:
-        await initialize_client()
+        mm_client = await authenticator.client()
     except Exception as e:
         print(f"Failed to initialize MonarchMoney client: {e}", file=sys.stderr)
         return
@@ -972,9 +954,39 @@ async def serve() -> None:
         )
 
 
-def main() -> None:
+async def login() -> None:
+    path = await auth.interactive_login(os.environ, input, getpass.getpass)
+    print(f"Saved session to {path}")
+    for legacy in auth.remove_legacy_sessions():
+        print(f"Removed old session file {legacy}")
+
+
+def logout() -> None:
+    path = auth.session_file(os.environ)
+    if auth.delete_token(path):
+        print(f"Removed {path}")
+    else:
+        print(f"No session at {path}")
+
+
+def main(argv: list[str] | None = None) -> None:
     """Console-script entry point."""
-    asyncio.run(serve())
+    parser = argparse.ArgumentParser(prog="monarch-money-mcp")
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser("serve", help="Run the MCP server over stdio (default)")
+    commands.add_parser("login", help="Log in once and save only the session token")
+    commands.add_parser("logout", help="Delete the saved session token")
+    command = parser.parse_args(argv).command
+
+    if command == "login":
+        try:
+            asyncio.run(login())
+        except Exception as e:
+            sys.exit(f"Login failed: {e}")
+    elif command == "logout":
+        logout()
+    else:
+        asyncio.run(serve())
 
 
 if __name__ == "__main__":

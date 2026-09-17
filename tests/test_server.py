@@ -2,12 +2,14 @@
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
+from gql.transport.exceptions import TransportServerError
 from mcp.types import TextContent
 from monarchmoney import MonarchMoney
 
+import auth
 import server
 from tests.helpers import Call, ToolError
 
@@ -70,75 +72,112 @@ async def test_call_tool_accepts_none_arguments(mm: AsyncMock) -> None:
     assert content.text == "[]"
 
 
-# --- initialize_client --------------------------------------------------------
+# --- token renewal ----------------------------------------------------------------
+
+UNAUTHORIZED = TransportServerError("401, message='Unauthorized'", 401)
+
 
 @pytest.fixture
-def client_cls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> MagicMock:
-    monkeypatch.setenv("MONARCH_EMAIL", "e@x")
-    monkeypatch.setenv("MONARCH_PASSWORD", "pw")
-    monkeypatch.delenv("MONARCH_MFA_SECRET", raising=False)
-    monkeypatch.delenv("MONARCH_FORCE_LOGIN", raising=False)
-    monkeypatch.setattr(server, "session_file", tmp_path / "session")
+def renewer(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Replaces the server's authenticator; renew() returns a fresh client."""
+    authenticator = AsyncMock(spec=auth.Authenticator)
+    authenticator.renew.return_value = AsyncMock(spec=MonarchMoney)
+    monkeypatch.setattr(server, "authenticator", authenticator)
+    return authenticator
+
+
+async def test_expired_token_is_renewed_and_retried(call: Call, mm: AsyncMock, renewer: AsyncMock) -> None:
+    mm.get_accounts.side_effect = UNAUTHORIZED
+    fresh = renewer.renew.return_value
+    fresh.get_accounts.return_value = {"accounts": []}
+    assert await call("get_accounts") == {"accounts": []}
+    renewer.renew.assert_awaited_once_with(mm)
+    assert server.mm_client is fresh
+
+
+async def test_renewal_failure_is_reported(call: Call, mm: AsyncMock, renewer: AsyncMock) -> None:
+    mm.get_accounts.side_effect = UNAUTHORIZED
+    renewer.renew.side_effect = auth.AuthError(auth.SESSION_EXPIRED)
+    with pytest.raises(ToolError, match="^Error executing get_accounts: Monarch Money session expired"):
+        await call("get_accounts")
+    assert server.mm_client is mm
+
+
+async def test_retry_happens_only_once(call: Call, mm: AsyncMock, renewer: AsyncMock) -> None:
+    mm.get_accounts.side_effect = UNAUTHORIZED
+    renewer.renew.return_value.get_accounts.side_effect = UNAUTHORIZED
+    with pytest.raises(ToolError, match="401"):
+        await call("get_accounts")
+    renewer.renew.assert_awaited_once()
+
+
+async def test_other_errors_are_not_retried(call: Call, mm: AsyncMock, renewer: AsyncMock) -> None:
+    mm.get_accounts.side_effect = TransportServerError("502", 502)
+    with pytest.raises(ToolError, match="502"):
+        await call("get_accounts")
+    renewer.renew.assert_not_awaited()
+
+
+# --- startup and CLI --------------------------------------------------------------
+
+async def test_serve_stops_when_auth_fails(renewer: AsyncMock, monkeypatch: pytest.MonkeyPatch,
+                                           capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(server, "mm_client", None)
-    cls = MagicMock()
-    cls.return_value = AsyncMock(spec=MonarchMoney)
-    monkeypatch.setattr(server, "MonarchMoney", cls)
-    return cls
-
-
-async def test_initialize_requires_credentials(client_cls: MagicMock,
-                                               monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MONARCH_PASSWORD")
-    with pytest.raises(ValueError, match="MONARCH_EMAIL and MONARCH_PASSWORD"):
-        await server.initialize_client()
-
-
-async def test_initialize_logs_in_without_session(client_cls: MagicMock) -> None:
-    await server.initialize_client()
-    client = client_cls.return_value
-    client.login.assert_awaited_once_with("e@x", "pw")
-    client.save_session.assert_called_once_with(str(server.session_file))
-    assert server.mm_client is client
-
-
-async def test_initialize_passes_mfa_secret(client_cls: MagicMock,
-                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MONARCH_MFA_SECRET", "SECRET")
-    await server.initialize_client()
-    client_cls.return_value.login.assert_awaited_once_with("e@x", "pw", mfa_secret_key="SECRET")
-
-
-async def test_initialize_reuses_valid_session(client_cls: MagicMock) -> None:
-    server.session_file.write_text("x")
-    await server.initialize_client()
-    client = client_cls.return_value
-    client.load_session.assert_called_once_with(str(server.session_file))
-    client.login.assert_not_awaited()
-
-
-async def test_initialize_logs_in_when_session_invalid(client_cls: MagicMock) -> None:
-    server.session_file.write_text("x")
-    client = client_cls.return_value
-    client.get_accounts.side_effect = RuntimeError("expired")
-    await server.initialize_client()
-    client.login.assert_awaited_once()
-    client.save_session.assert_called_once()
-
-
-async def test_initialize_force_login_skips_session(client_cls: MagicMock,
-                                                    monkeypatch: pytest.MonkeyPatch) -> None:
-    server.session_file.write_text("x")
-    monkeypatch.setenv("MONARCH_FORCE_LOGIN", "1")
-    await server.initialize_client()
-    client = client_cls.return_value
-    client.load_session.assert_not_called()
-    client.login.assert_awaited_once()
-
-
-async def test_serve_stops_when_login_fails(client_cls: MagicMock,
-                                            capsys: pytest.CaptureFixture[str]) -> None:
-    client_cls.return_value.login.side_effect = RuntimeError("bad password")
+    renewer.client.side_effect = auth.AuthError(auth.NOT_LOGGED_IN)
     await server.serve()
     out, err = capsys.readouterr()
     assert out == ""
-    assert "Failed to initialize MonarchMoney client: bad password" in err
+    assert "Failed to initialize MonarchMoney client: Not logged in" in err
+    assert server.mm_client is None
+
+
+@pytest.mark.parametrize("argv, expected", [
+    ([], "serve"), (["serve"], "serve"), (["login"], "login"), (["logout"], "logout"),
+])
+def test_main_dispatch(monkeypatch: pytest.MonkeyPatch, argv: list[str], expected: str) -> None:
+    ran: list[str] = []
+
+    async def fake_serve() -> None:
+        ran.append("serve")
+
+    async def fake_login() -> None:
+        ran.append("login")
+
+    monkeypatch.setattr(server, "serve", fake_serve)
+    monkeypatch.setattr(server, "login", fake_login)
+    monkeypatch.setattr(server, "logout", lambda: ran.append("logout"))
+    server.main(argv)
+    assert ran == [expected]
+
+
+def test_main_login_failure_exits(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def failing_login() -> None:
+        raise auth.AuthError("bad password")
+
+    monkeypatch.setattr(server, "login", failing_login)
+    with pytest.raises(SystemExit, match="^Login failed: bad password$"):
+        server.main(["login"])
+
+
+async def test_login_saves_and_cleans_up(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                         capsys: pytest.CaptureFixture[str]) -> None:
+    async def fake_interactive_login(env: object, prompt: object, secret: object) -> Path:
+        return tmp_path / "session.json"
+
+    monkeypatch.setattr(auth, "interactive_login", fake_interactive_login)
+    monkeypatch.setattr(auth, "remove_legacy_sessions", lambda: [tmp_path / "old.pickle"])
+    await server.login()
+    assert capsys.readouterr().out.splitlines() == [
+        f"Saved session to {tmp_path / 'session.json'}",
+        f"Removed old session file {tmp_path / 'old.pickle'}",
+    ]
+
+
+def test_logout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                capsys: pytest.CaptureFixture[str]) -> None:
+    session = tmp_path / "session.json"
+    monkeypatch.setenv("MONARCH_SESSION_FILE", str(session))
+    auth.save_token(session, "abc")
+    server.logout()
+    server.logout()
+    assert capsys.readouterr().out.splitlines() == [f"Removed {session}", f"No session at {session}"]
