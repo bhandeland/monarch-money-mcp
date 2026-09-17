@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "monarch-money-mcp",
   "display_name": "Monarch Money",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Accounts, transactions, budgets, goals, merchants, rules, and more from Monarch Money.",
   "long_description": "An unofficial MCP server for Monarch Money. It reads and edits your accounts, transactions, categories, budgets, recurring bills, savings goals, merchants, and rules.\n\nSign-in: every setting is optional. If you leave them all blank, the extension uses the session token saved by running `monarch-money-mcp login` once in a terminal (see the README). If you fill in your email and password (and MFA secret, if your account uses 2FA), the extension logs in by itself and logs in again when the token expires. Those values are stored in your system keychain. If Monarch asks for a CAPTCHA, run `monarch-money-mcp login --cookies` instead, or paste your browser's Cookie header into the Browser cookies setting.\n",
   "author": {
