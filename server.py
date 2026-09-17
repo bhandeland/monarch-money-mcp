@@ -2023,6 +2023,318 @@ async def delete_schedule_c_category_mapping(mm: MonarchMoney, args: Args) -> An
     payload = resp.get("deleteTaxScheduleCategoryMapping") or {}
     q.raise_payload_errors(payload.get("errors"), "Schedule C mapping deletion")
     return {"category_id": args["category_id"], "tax_year": year, "deleted": payload.get("deleted")}
+# --- Forecasting and paychecks ----------------------------------------------
+
+async def forecast_mutation(mm: MonarchMoney, request: GraphQLRequest, field: str,
+                           variables: Args, action: str) -> Args:
+    """Run a mutation and return its payload, raising on payload errors."""
+    resp = await q.execute(mm, request, variables)
+    payload: Args = resp.get(field) or {}
+    q.raise_payload_errors(payload.get("errors"), action)
+    return payload
+
+
+@tool("get_cash_flow_projection",
+      "Project an account's daily balance from upcoming recurring transactions: lowest "
+      "balance, overdraft dates, and safe-to-spend. Defaults to the next 30 days (the maximum).",
+      {"account_id": string("Account ID (see get_accounts)"),
+       **DATE_RANGE,
+       "days": {"type": "integer", "minimum": 1, "maximum": 30,
+                "description": "Days to project, instead of a date range"}},
+      ["account_id"])
+async def get_cash_flow_projection(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    variables: Args = {"accountId": args["account_id"]}
+    if start:
+        variables.update(startDate=start, endDate=end)
+    if "days" in args:
+        variables["days"] = args["days"]
+    return (await q.execute(mm, q.GET_CASH_FLOW_PROJECTION, variables)).get("cashFlowProjection")
+
+
+@tool("get_forecast_scenarios",
+      "List long-term forecast scenarios with headline results (net worth today, at "
+      "retirement, and at the end of the forecast)")
+async def get_forecast_scenarios(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_FORECAST_SCENARIOS)).get("forecastScenarios")
+
+
+SCENARIO_ID = string("Forecast scenario external ID (see get_forecast_scenarios)")
+
+
+@tool("get_forecast_scenario",
+      "Get a forecast scenario's settings, accounts, people, life events, and priority rules",
+      {"scenario_id": string("Forecast scenario external ID (default: the primary scenario)")})
+async def get_forecast_scenario(mm: MonarchMoney, args: Args) -> Any:
+    variables = {"externalId": args["scenario_id"]} if args.get("scenario_id") else {}
+    return (await q.execute(mm, q.GET_FORECAST_SCENARIO, variables)).get("forecastScenario")
+
+
+SCENARIO_STYLE: Args = {
+    "icon": string("Emoji icon"),
+    "color": string("Color name"),
+}
+
+
+@tool("create_forecast_scenario",
+      "Create a forecast scenario, starting from the household's current accounts and settings",
+      {"name": string("Scenario name"), **SCENARIO_STYLE}, ["name"], WRITE)
+async def create_forecast_scenario(mm: MonarchMoney, args: Args) -> Any:
+    payload = await forecast_mutation(
+        mm, q.CREATE_FORECAST_SCENARIO, "createForecastScenario",
+        {"input": pick(args, {"name": "name", "icon": "icon", "color": "color"})},
+        "Forecast scenario creation")
+    return payload.get("scenario")
+
+
+SCENARIO_SETTING_NAMES = {
+    "name": "name",
+    "icon": "icon",
+    "color": "color",
+    "inflation_rate": "inflationRate",
+    "projection_years": "projectionYears",
+    "use_actuals_as_baseline": "useActualsAsBaseline",
+    "split_uncategorized_savings": "splitUncategorizedSavings",
+    "dollar_mode": "dollarMode",
+}
+
+
+@tool("update_forecast_scenario", "Change a forecast scenario's name, style, or settings",
+      {"scenario_id": SCENARIO_ID,
+       "name": string("New name"),
+       **SCENARIO_STYLE,
+       "inflation_rate": number("Yearly inflation rate, in percent"),
+       "projection_years": {"type": "integer", "minimum": 1,
+                            "description": "How many years to project"},
+       "use_actuals_as_baseline": boolean(
+           "Base income and expenses on actual transactions rather than the budget"),
+       "split_uncategorized_savings": boolean("Split uncategorized savings across accounts"),
+       "dollar_mode": string("Show results in today's or future dollars",
+                             enum=q.FORECAST_DOLLAR_MODES)},
+      ["scenario_id"], WRITE)
+async def update_forecast_scenario(mm: MonarchMoney, args: Args) -> Any:
+    scenario_id = args["scenario_id"]
+    current = (await q.execute(mm, q.GET_FORECAST_SCENARIO_SETTINGS_VERSION,
+                               {"externalId": scenario_id})).get("forecastScenario")
+    if not current:
+        raise ValueError(f"No forecast scenario {scenario_id}")
+    return await forecast_mutation(mm, q.UPDATE_FORECAST_SCENARIO, "updateForecastScenario", {
+        "input": {
+            "scenarioExternalId": scenario_id,
+            "expectedVersion": current["categoryVersions"]["settingsVersion"],
+            **pick(args, SCENARIO_SETTING_NAMES),
+        },
+    }, "Forecast scenario update")
+
+
+@tool("duplicate_forecast_scenario", "Copy a forecast scenario, including its events and rules",
+      {"scenario_id": SCENARIO_ID}, ["scenario_id"], WRITE)
+async def duplicate_forecast_scenario(mm: MonarchMoney, args: Args) -> Any:
+    payload = await forecast_mutation(
+        mm, q.DUPLICATE_FORECAST_SCENARIO, "duplicateForecastScenario",
+        {"input": {"sourceScenarioExternalId": args["scenario_id"]}},
+        "Forecast scenario duplication")
+    return payload.get("scenario")
+
+
+@tool("delete_forecast_scenario",
+      "Permanently delete a forecast scenario. Returns the remaining scenarios.",
+      {"scenario_id": SCENARIO_ID}, ["scenario_id"], DESTRUCTIVE)
+async def delete_forecast_scenario(mm: MonarchMoney, args: Args) -> Any:
+    return await forecast_mutation(
+        mm, q.DELETE_FORECAST_SCENARIO, "deleteForecastScenario",
+        {"input": {"scenarioExternalId": args["scenario_id"]}}, "Forecast scenario deletion")
+
+
+@tool("get_debt_accounts",
+      "List debt accounts (credit cards and loans) with APR, minimum and planned payments")
+async def get_debt_accounts(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_DEBT_ACCOUNTS)).get("debtAccounts")
+
+
+@tool("get_debt_paydown_plan",
+      "Project when debts will be paid off and the interest paid, optionally with extra "
+      "payments. Also returns the debt accounts.",
+      {"method": string("Payoff order: avalanche (highest APR first), snowball (smallest "
+                        "balance first), or planned (each account's planned payment)",
+                        enum=q.DEBT_PAYDOWN_METHODS, default="avalanche"),
+       "additional_monthly_payment": number("Extra amount paid every month"),
+       "additional_one_time_payment": number("Extra one-time payment")})
+async def get_debt_paydown_plan(mm: MonarchMoney, args: Args) -> Any:
+    plan_input: Args = {
+        "debtPaydownMethod": args.get("method", "avalanche"),
+        **pick(args, {"additional_monthly_payment": "additionalMonthlyPayment",
+                      "additional_one_time_payment": "additionalOneTimePayment"}),
+    }
+    return await q.execute(mm, q.GET_DEBT_PAYDOWN_PLAN, {"input": plan_input})
+
+
+@tool("get_debt_paydown_budget_amounts",
+      "Get the budgeted and actual debt payments per account for a range of months",
+      {"start_month": string("First month (any date in it, YYYY-MM-DD)"),
+       "end_month": string("Last month (any date in it, YYYY-MM-DD)")},
+      ["start_month", "end_month"])
+async def get_debt_paydown_budget_amounts(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_DEBT_PAYDOWN_BUDGET_AMOUNTS, {
+        "startMonth": first_of_month(args, "start_month"),
+        "endMonth": first_of_month(args, "end_month"),
+    })
+    return resp.get("debtPaydownMonthlyBudgetAmounts")
+
+
+@tool("set_debt_paydown_budget_amount",
+      "Set how much to budget for paying down a debt account in a month. Omit amount to "
+      "clear it.",
+      {"account_id": string("Debt account ID (see get_debt_accounts)"),
+       "month": string("Month (any date in it, YYYY-MM-DD)"),
+       "amount": number("Amount to budget"),
+       "apply_to_future": boolean("Also use this amount for the following months")},
+      ["account_id", "month"], WRITE)
+async def set_debt_paydown_budget_amount(mm: MonarchMoney, args: Args) -> Any:
+    budget: Args = {
+        "accountId": args["account_id"],
+        "month": first_of_month(args, "month"),
+        "amount": args.get("amount"),
+    }
+    if "apply_to_future" in args:
+        budget["applyToFuture"] = args["apply_to_future"]
+    return await forecast_mutation(mm, q.SET_DEBT_PAYDOWN_BUDGET_AMOUNT,
+                                  "setDebtPaydownBudgetAmount", {"input": budget},
+                                  "Debt payment budget update")
+
+
+@tool("get_paychecks", "List recorded paychecks with deductions and linked deposits",
+      {**DATE_RANGE,
+       "owner_id": string("Only this household member's paychecks (see get_household_members)"),
+       "employer_id": string("Only this employer's paychecks (see get_paycheck_employers)")})
+async def get_paychecks(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    variables: Args = {"startDate": start, "endDate": end} if start else {}
+    variables.update(pick(args, {"owner_id": "ownerId", "employer_id": "employerId"}))
+    return (await q.execute(mm, q.GET_PAYCHECKS, variables)).get("paychecks")
+
+
+@tool("get_paycheck", "Get one paycheck with its deductions and linked deposits",
+      {"paycheck_id": string("Paycheck ID")}, ["paycheck_id"])
+async def get_paycheck(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_PAYCHECK, {"id": args["paycheck_id"]})).get("paycheck")
+
+
+@tool("get_paychecks_summary",
+      "Total gross pay, deductions, and net pay, with deductions broken down by type",
+      {**DATE_RANGE,
+       "owner_ids": id_list("Only these household members' paychecks"),
+       "employer_id": string("Only this employer's paychecks")})
+async def get_paychecks_summary(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    variables: Args = {"startDate": start, "endDate": end} if start else {}
+    variables.update(pick(args, {"owner_ids": "ownerIds", "employer_id": "employerId"}))
+    return (await q.execute(mm, q.GET_PAYCHECKS_SUMMARY, variables)).get("paychecksSummary")
+
+
+@tool("get_paycheck_employers", "List employers that paychecks are recorded for",
+      {"search": string("Only employers whose name matches"),
+       "limit": {"type": "integer", "minimum": 1, "description": "Maximum results"},
+       "offset": {"type": "integer", "minimum": 0, "description": "Results to skip"}})
+async def get_paycheck_employers(mm: MonarchMoney, args: Args) -> Any:
+    return await q.execute(mm, q.GET_PAYCHECK_EMPLOYERS,
+                           pick(args, {"search": "search", "limit": "limit", "offset": "offset"}))
+
+
+PAYCHECK_FIELDS: Args = {
+    "employer_id": string("Employer ID (see get_paycheck_employers)"),
+    "gross_amount": number("Gross pay"),
+    "pay_date": string("Pay date in YYYY-MM-DD format"),
+    "pay_period_start": string("Pay period start in YYYY-MM-DD format"),
+    "pay_period_end": string("Pay period end in YYYY-MM-DD format"),
+    "owner_id": string("Household member the paycheck belongs to"),
+    "payroll_provider": string("Payroll provider", enum=q.PAYROLL_PROVIDERS),
+    "deductions": {
+        "type": "array",
+        "description": "Deductions from gross pay. On update, replaces all existing deductions.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "deduction_type": string("Deduction type", enum=q.PAYCHECK_DEDUCTION_TYPES),
+                "amount": number("Amount deducted"),
+                "custom_name": string("Name, for deduction_type custom"),
+            },
+            "required": ["deduction_type", "amount"],
+            "additionalProperties": False,
+        },
+    },
+    "deposit_transaction_ids": id_list(
+        "Deposit transactions this paycheck paid into. On update, replaces the existing links."),
+}
+
+
+def paycheck_input(args: Args) -> Args:
+    paycheck = pick(args, {"employer_id": "employerId", "gross_amount": "grossAmount",
+                           "owner_id": "ownerId", "payroll_provider": "payrollProvider"})
+    for arg, api in (("pay_date", "payDate"), ("pay_period_start", "payPeriodStart"),
+                     ("pay_period_end", "payPeriodEnd")):
+        if arg in args:
+            paycheck[api] = parse_date_arg(args, arg)
+    if "deductions" in args:
+        paycheck["deductions"] = [
+            {"deductionType": d["deduction_type"], "amount": d["amount"],
+             **({"customDeductionName": d["custom_name"]} if d.get("custom_name") else {})}
+            for d in args["deductions"]
+        ]
+    if "deposit_transaction_ids" in args:
+        paycheck["deposits"] = [{"transactionId": t} for t in args["deposit_transaction_ids"]]
+    return paycheck
+
+
+@tool("create_paycheck", "Record a paycheck", PAYCHECK_FIELDS,
+      ["employer_id", "gross_amount", "pay_date"], WRITE)
+async def create_paycheck(mm: MonarchMoney, args: Args) -> Any:
+    payload = await forecast_mutation(mm, q.CREATE_PAYCHECK, "createPaycheck",
+                                     {"input": paycheck_input(args)}, "Paycheck creation")
+    return payload.get("paycheck")
+
+
+@tool("update_paycheck", "Change a recorded paycheck",
+      {"paycheck_id": string("Paycheck ID (see get_paychecks)"), **PAYCHECK_FIELDS},
+      ["paycheck_id"], WRITE)
+async def update_paycheck(mm: MonarchMoney, args: Args) -> Any:
+    payload = await forecast_mutation(
+        mm, q.UPDATE_PAYCHECK, "updatePaycheck",
+        {"input": {"id": args["paycheck_id"], **paycheck_input(args)}}, "Paycheck update")
+    return payload.get("paycheck")
+
+
+@tool("delete_paycheck", "Delete a recorded paycheck",
+      {"paycheck_id": string("Paycheck ID")}, ["paycheck_id"], DESTRUCTIVE)
+async def delete_paycheck(mm: MonarchMoney, args: Args) -> Any:
+    return await forecast_mutation(mm, q.DELETE_PAYCHECK, "deletePaycheck",
+                                  {"input": {"id": args["paycheck_id"]}}, "Paycheck deletion")
+
+
+@tool("create_paycheck_employer", "Add an employer to record paychecks for",
+      {"name": string("Employer name")}, ["name"], WRITE)
+async def create_paycheck_employer(mm: MonarchMoney, args: Args) -> Any:
+    payload = await forecast_mutation(mm, q.CREATE_PAYCHECK_EMPLOYER, "createPaycheckEmployer",
+                                     {"input": {"name": args["name"]}},
+                                     "Paycheck employer creation")
+    return payload.get("employer")
+
+
+@tool("update_paycheck_employer", "Rename a paycheck employer",
+      {"employer_id": string("Employer ID"), "name": string("New name")},
+      ["employer_id", "name"], WRITE)
+async def update_paycheck_employer(mm: MonarchMoney, args: Args) -> Any:
+    payload = await forecast_mutation(
+        mm, q.UPDATE_PAYCHECK_EMPLOYER, "updatePaycheckEmployer",
+        {"input": {"id": args["employer_id"], "name": args["name"]}}, "Paycheck employer update")
+    return payload.get("employer")
+
+
+@tool("delete_paycheck_employer", "Delete a paycheck employer",
+      {"employer_id": string("Employer ID")}, ["employer_id"], DESTRUCTIVE)
+async def delete_paycheck_employer(mm: MonarchMoney, args: Args) -> Any:
+    return await forecast_mutation(mm, q.DELETE_PAYCHECK_EMPLOYER, "deletePaycheckEmployer",
+                                  {"id": args["employer_id"]}, "Paycheck employer deletion")
 
 
 # --- Other ------------------------------------------------------------------
