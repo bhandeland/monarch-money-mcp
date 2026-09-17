@@ -8,7 +8,7 @@ import sys
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -80,6 +80,12 @@ def first_of_month(arguments: Args, key: str) -> str | None:
     """Budgets are keyed by the first of the month."""
     value = parse_date_arg(arguments, key)
     return value[:8] + "01" if value else None
+
+
+def month_bounds(day: date) -> tuple[str, str]:
+    """First and last day of the month containing `day`."""
+    next_month = (day.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return day.replace(day=1).isoformat(), (next_month - timedelta(days=1)).isoformat()
 
 
 def pick(arguments: Args, mapping: dict[str, str]) -> Args:
@@ -395,21 +401,33 @@ async def create_transaction(mm: MonarchMoney, args: Args) -> Any:
        "date": string("New transaction date in YYYY-MM-DD format"),
        "notes": string("New notes for the transaction"),
        "hide_from_reports": boolean("Hide this transaction from reports and budgets"),
-       "needs_review": boolean("Mark the transaction as needing review")},
+       "needs_review": boolean("Mark the transaction as needing review"),
+       "review_status": string("Review status", enum=q.REVIEW_STATUSES),
+       "is_recurring": boolean("Mark as recurring or not"),
+       "owner_user_id": string("Household member who owns it (see get_household_members)"),
+       "business_entity_id": string("Business the transaction belongs to"),
+       "goal_id": string("Legacy (pre-savings-goals) goal to link")},
       ["transaction_id"], WRITE)
 async def update_transaction(mm: MonarchMoney, args: Args) -> Any:
-    updates = pick(args, {
-        "transaction_id": "transaction_id",
+    updates = {"id": args["transaction_id"], **pick(args, {
         "amount": "amount",
-        "description": "merchant_name",
-        "category_id": "category_id",
+        "description": "name",
+        "category_id": "category",
         "notes": "notes",
-        "hide_from_reports": "hide_from_reports",
-        "needs_review": "needs_review",
-    })
+        "hide_from_reports": "hideFromReports",
+        "needs_review": "needsReview",
+        "review_status": "reviewStatus",
+        "is_recurring": "isRecurring",
+        "owner_user_id": "ownerUserId",
+        "business_entity_id": "businessEntityId",
+        "goal_id": "goalId",
+    })}
     if "date" in args:
         updates["date"] = parse_date_arg(args, "date")
-    return await mm.update_transaction(**updates)
+    resp = await q.execute(mm, q.UPDATE_TRANSACTION, {"input": updates})
+    payload = resp.get("updateTransaction") or {}
+    q.raise_payload_errors(payload.get("errors"), "Transaction update")
+    return payload.get("transaction")
 
 
 @tool("delete_transaction", "Permanently delete a transaction",
@@ -417,6 +435,87 @@ async def update_transaction(mm: MonarchMoney, args: Args) -> Any:
 async def delete_transaction(mm: MonarchMoney, args: Args) -> Any:
     return {"transaction_id": args["transaction_id"],
             "deleted": await mm.delete_transaction(args["transaction_id"])}
+
+
+def bulk_selection(args: Args) -> Args:
+    ids: list[str] = args["transaction_ids"]
+    # expectedAffectedTransactionCount makes Monarch refuse if the selection
+    # doesn't match what we think we're changing.
+    return {"selectedTransactionIds": ids, "excludedTransactionIds": [], "allSelected": False,
+            "expectedAffectedTransactionCount": len(ids), "filters": None}
+
+
+def bulk_result(payload: Args, requested: int, action: str) -> Args:
+    errors = payload.get("errors")
+    if errors:
+        raise RuntimeError(f"{action} failed: {errors.get('message') or errors}")
+    return {"success": payload.get("success"), "requested": requested,
+            "affected": payload.get("affectedCount")}
+
+
+TRANSACTION_IDS: Args = {"type": "array", "minItems": 1, "maxItems": 500,
+                         "items": {"type": "string"}, "description": "Transaction IDs"}
+BULK_UPDATE_FIELDS = {
+    "category_id": "categoryId",
+    "merchant_name": "merchantName",
+    "notes": "notes",
+    "hide_from_reports": "hide",
+    "tag_ids": "tags",
+    "review_status": "reviewStatus",
+    "is_recurring": "isRecurring",
+    "owner_user_id": "ownerUserId",
+    "business_entity_id": "businessEntityId",
+}
+
+
+@tool("bulk_update_transactions",
+      "Apply the same change to many transactions at once. tag_ids replaces their tags.",
+      {"transaction_ids": TRANSACTION_IDS,
+       "category_id": string("Category to assign"),
+       "merchant_name": string("Merchant name to assign"),
+       "date": string("Date to set, YYYY-MM-DD"),
+       "notes": string("Notes to set"),
+       "hide_from_reports": boolean("Hide (true) or unhide (false)"),
+       "tag_ids": id_list("Tags to set (replaces existing tags)"),
+       "review_status": string("Review status", enum=q.REVIEW_STATUSES),
+       "is_recurring": boolean("Mark as recurring or not"),
+       "owner_user_id": string("Household member who owns them"),
+       "business_entity_id": string("Business they belong to")},
+      ["transaction_ids"], WRITE)
+async def bulk_update_transactions(mm: MonarchMoney, args: Args) -> Any:
+    updates = pick(args, BULK_UPDATE_FIELDS)
+    if "date" in args:
+        updates["date"] = parse_date_arg(args, "date")
+    if not updates:
+        raise ValueError("Nothing to update: give at least one field to change")
+    resp = await q.execute(mm, q.BULK_UPDATE_TRANSACTIONS, {**bulk_selection(args), "updates": updates})
+    return bulk_result(resp.get("bulkUpdateTransactions") or {}, len(args["transaction_ids"]), "Bulk update")
+
+
+@tool("bulk_delete_transactions", "Permanently delete many transactions at once",
+      {"transaction_ids": TRANSACTION_IDS}, ["transaction_ids"], DESTRUCTIVE)
+async def bulk_delete_transactions(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.BULK_DELETE_TRANSACTIONS, bulk_selection(args))
+    return bulk_result(resp.get("bulkDeleteTransactions") or {}, len(args["transaction_ids"]), "Bulk delete")
+
+
+@tool("move_transactions", "Move transactions from one account to another",
+      {"from_account_id": string("Account the transactions are in"),
+       "to_account_id": string("Account to move them to"),
+       "transaction_ids": TRANSACTION_IDS},
+      ["from_account_id", "to_account_id", "transaction_ids"], WRITE)
+async def move_transactions(mm: MonarchMoney, args: Args) -> Any:
+    ids: list[str] = args["transaction_ids"]
+    resp = await q.execute(mm, q.MOVE_TRANSACTIONS, {"input": {
+        "fromAccountId": args["from_account_id"],
+        "toAccountId": args["to_account_id"],
+        "selectedTransactionIds": ids,
+        "isAllSelected": False,
+        "expectedAffectedTransactionCount": len(ids),
+    }})
+    payload = resp.get("moveTransactions") or {}
+    q.raise_payload_errors(payload.get("errors"), "Move")
+    return {"requested": len(ids), "moved": payload.get("numTransactionsMoved")}
 
 
 @tool("get_transaction_splits", "Get the split lines for a transaction",
@@ -487,6 +586,37 @@ async def set_transaction_tags(mm: MonarchMoney, args: Args) -> Any:
     return await mm.set_transaction_tags(args["transaction_id"], args["tag_ids"])
 
 
+@tool("update_transaction_tag", "Rename a tag or change its color",
+      {"tag_id": string("Tag ID (see get_transaction_tags)"),
+       "name": string("New name"),
+       "color": string("New hex color including '#'")},
+      ["tag_id"], WRITE)
+async def update_transaction_tag(mm: MonarchMoney, args: Args) -> Any:
+    if "name" not in args and "color" not in args:
+        raise ValueError("Give a new name and/or color")
+    # Monarch requires both name and color, so fill in whichever wasn't given
+    tags = (await mm.get_transaction_tags())["householdTransactionTags"]
+    current = next((t for t in tags if t["id"] == args["tag_id"]), None)
+    if current is None:
+        raise ValueError(f"No tag {args['tag_id']}")
+    resp = await q.execute(mm, q.UPDATE_TRANSACTION_TAG, {"input": {
+        "id": args["tag_id"],
+        "name": args.get("name", current["name"]),
+        "color": args.get("color", current["color"]),
+    }})
+    payload = resp.get("updateTransactionTag") or {}
+    q.raise_payload_errors(payload.get("errors"), "Tag update")
+    return payload.get("tag")
+
+
+@tool("delete_transaction_tag", "Delete a tag. It's removed from all transactions.",
+      {"tag_id": string("Tag ID")}, ["tag_id"], DESTRUCTIVE)
+async def delete_transaction_tag(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.DELETE_TRANSACTION_TAG, {"tagId": args["tag_id"]})
+    q.raise_payload_errors((resp.get("deleteTransactionTag") or {}).get("errors"), "Tag deletion")
+    return {"tag_id": args["tag_id"], "deleted": True}
+
+
 # --- Categories -------------------------------------------------------------
 
 @tool("get_transaction_categories", "List all transaction categories")
@@ -514,15 +644,94 @@ async def create_transaction_category(mm: MonarchMoney, args: Args) -> Any:
     )
 
 
+@tool("update_transaction_category", "Change a category's name, icon, group, or budget settings",
+      {"category_id": string("Category ID"),
+       "name": string("New name"),
+       "icon": string("New emoji icon"),
+       "group_id": string("Move to this category group"),
+       "exclude_from_budget": boolean("Leave this category out of the budget"),
+       "budget_variability": string("Budget type", enum=q.BUDGET_VARIABILITIES),
+       "rollover_enabled": boolean("Roll unspent budget over to the next month")},
+      ["category_id"], WRITE)
+async def update_transaction_category(mm: MonarchMoney, args: Args) -> Any:
+    changes = pick(args, {
+        "name": "name",
+        "icon": "icon",
+        "group_id": "group",
+        "exclude_from_budget": "excludeFromBudget",
+        "budget_variability": "budgetVariability",
+        "rollover_enabled": "rolloverEnabled",
+    })
+    if not changes:
+        raise ValueError("Nothing to update: give at least one field to change")
+    resp = await q.execute(mm, q.UPDATE_CATEGORY, {"input": {"id": args["category_id"], **changes}})
+    payload = resp.get("updateCategory") or {}
+    q.raise_payload_errors(payload.get("errors"), "Category update")
+    return payload.get("category")
+
+
 @tool("delete_transaction_categories",
-      "Delete one or more categories. Their transactions become uncategorized.",
-      {"category_ids": id_list("Category IDs to delete")}, ["category_ids"], DESTRUCTIVE)
+      "Delete one or more categories. Their transactions move to move_to_category_id, "
+      "or become uncategorized if it isn't given.",
+      {"category_ids": id_list("Category IDs to delete"),
+       "move_to_category_id": string("Category to move their transactions to")},
+      ["category_ids"], DESTRUCTIVE)
 async def delete_transaction_categories(mm: MonarchMoney, args: Args) -> Any:
-    category_ids: list[str] = args["category_ids"]
-    outcomes = await mm.delete_transaction_categories(category_ids)
-    return [{"category_id": cid, "deleted": True} if ok is True
-            else {"category_id": cid, "deleted": False, "error": str(ok)}
-            for cid, ok in zip(category_ids, outcomes)]
+    results: list[Args] = []
+    for cid in args["category_ids"]:
+        try:
+            resp = await q.execute(mm, q.DELETE_CATEGORY, {
+                "id": cid, "moveToCategoryId": args.get("move_to_category_id")})
+            payload = resp.get("deleteCategory") or {}
+            q.raise_payload_errors(payload.get("errors"), "Category deletion")
+            if not payload.get("deleted"):
+                raise RuntimeError("Category deletion failed")
+            results.append({"category_id": cid, "deleted": True})
+        except Exception as e:
+            results.append({"category_id": cid, "deleted": False, "error": str(e)})
+    return results
+
+
+CATEGORY_GROUP_FIELDS: Args = {
+    "name": string("Group name"),
+    "icon": string("Emoji icon"),
+    "color": string("Hex color including '#'"),
+    "budget_variability": string("Budget type", enum=q.BUDGET_VARIABILITIES),
+}
+CATEGORY_GROUP_FIELD_NAMES = {"name": "name", "icon": "icon", "color": "color",
+                              "budget_variability": "budgetVariability"}
+
+
+@tool("create_category_group", "Create a category group",
+      {**CATEGORY_GROUP_FIELDS, "type": string("Group type", enum=q.CATEGORY_TYPES)},
+      ["name", "type"], WRITE)
+async def create_category_group(mm: MonarchMoney, args: Args) -> Any:
+    group = {"type": args["type"], **pick(args, CATEGORY_GROUP_FIELD_NAMES)}
+    resp = await q.execute(mm, q.CREATE_CATEGORY_GROUP, {"input": group})
+    return (resp.get("createCategoryGroup") or {}).get("categoryGroup")
+
+
+@tool("update_category_group", "Change a category group's name, icon, color, or budget type",
+      {"group_id": string("Category group ID"), **CATEGORY_GROUP_FIELDS}, ["group_id"], WRITE)
+async def update_category_group(mm: MonarchMoney, args: Args) -> Any:
+    changes = pick(args, CATEGORY_GROUP_FIELD_NAMES)
+    if not changes:
+        raise ValueError("Nothing to update: give at least one field to change")
+    resp = await q.execute(mm, q.UPDATE_CATEGORY_GROUP, {"input": {"id": args["group_id"], **changes}})
+    return (resp.get("updateCategoryGroup") or {}).get("categoryGroup")
+
+
+@tool("delete_category_group",
+      "Delete a category group. Its categories move to move_to_group_id.",
+      {"group_id": string("Category group ID"),
+       "move_to_group_id": string("Group to move its categories to")},
+      ["group_id"], DESTRUCTIVE)
+async def delete_category_group(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.DELETE_CATEGORY_GROUP, {
+        "id": args["group_id"], "moveToGroupId": args.get("move_to_group_id")})
+    payload = resp.get("deleteCategoryGroup") or {}
+    q.raise_payload_errors(payload.get("errors"), "Category group deletion")
+    return {"group_id": args["group_id"], "deleted": payload.get("deleted")}
 
 
 # --- Budgets and cash flow --------------------------------------------------
@@ -621,6 +830,40 @@ async def get_recurring_transactions(mm: MonarchMoney, args: Args) -> Any:
     return await mm.get_recurring_transactions(start_date=start, end_date=end)
 
 
+@tool("get_recurring_streams",
+      "List every recurring series (subscriptions, bills, income) with frequency and amount",
+      {"include_liabilities": boolean("Include credit card and loan payments", True)})
+async def get_recurring_streams(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_RECURRING_STREAMS,
+                           {"includeLiabilities": args.get("include_liabilities", True)})
+    return [item["stream"] for item in resp.get("recurringTransactionStreams") or []]
+
+
+@tool("get_recurring_remaining_due",
+      "Total recurring amount still due in a period (default: the current month)",
+      {**DATE_RANGE,
+       "include_liabilities": boolean("Include credit card and loan payments", True)})
+async def get_recurring_remaining_due(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    if not start:
+        start, end = month_bounds(date.today())
+    resp = await q.execute(mm, q.GET_RECURRING_REMAINING_DUE, {
+        "startDate": start, "endDate": end,
+        "includeLiabilities": args.get("include_liabilities", True)})
+    return {"start_date": start, "end_date": end,
+            "amount": (resp.get("recurringRemainingDue") or {}).get("amount")}
+
+
+@tool("mark_stream_not_recurring",
+      "Stop treating a recurring series as recurring (see get_recurring_streams for IDs)",
+      {"stream_id": string("Recurring stream ID")}, ["stream_id"], WRITE)
+async def mark_stream_not_recurring(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.MARK_STREAM_NOT_RECURRING, {"streamId": args["stream_id"]})
+    payload = resp.get("markStreamAsNotRecurring") or {}
+    q.raise_payload_errors(payload.get("errors"), "Marking not recurring")
+    return {"stream_id": args["stream_id"], "success": payload.get("success")}
+
+
 # --- Transaction rules ------------------------------------------------------
 
 @tool("list_transaction_rules",
@@ -629,12 +872,8 @@ async def list_transaction_rules(mm: MonarchMoney, args: Args) -> Any:
     return await q.execute(mm, q.GET_RULES)
 
 
-@tool("create_transaction_rule",
-      "Create a transaction rule. Conditions (combine as needed): merchant_contains / "
-      "merchant_equals, amount, account_ids, match_category_ids. Actions: set_category_id, "
-      "set_merchant_name, and/or add_tag_ids. apply_to_existing defaults to false; setting it "
-      "true rewrites matching past transactions.",
-      {"merchant_contains": string("Merchant name contains this text"),
+RULE_FIELDS: Args = {
+       "merchant_contains": string("Merchant name contains this text"),
        "merchant_equals": string("Merchant name equals this text"),
        "use_original_statement": boolean(
            "Match the raw bank statement text instead of the merchant name", False),
@@ -656,8 +895,16 @@ async def list_transaction_rules(mm: MonarchMoney, args: Args) -> Any:
        "set_category_id": string("Category to assign"),
        "set_merchant_name": string("Merchant name to assign"),
        "add_tag_ids": id_list("Tags to add"),
-       "apply_to_existing": boolean("Also apply to matching past transactions", False)},
-      annotations=WRITE)
+       "apply_to_existing": boolean("Also apply to matching past transactions", False)}
+RULE_HELP = ("Conditions (combine as needed): merchant_contains / merchant_equals, amount, "
+             "account_ids, match_category_ids. Actions: set_category_id, set_merchant_name, "
+             "and/or add_tag_ids.")
+
+
+@tool("create_transaction_rule",
+      f"Create a transaction rule. {RULE_HELP} apply_to_existing defaults to false; setting it "
+      "true rewrites matching past transactions (check first with preview_transaction_rule).",
+      RULE_FIELDS, annotations=WRITE)
 async def create_transaction_rule(mm: MonarchMoney, args: Args) -> Any:
     rule_input = q.build_rule_input(args)
     resp = await q.execute(mm, q.CREATE_RULE, {"input": rule_input})
@@ -678,6 +925,38 @@ async def delete_transaction_rule(mm: MonarchMoney, args: Args) -> Any:
     still_there = any(r.get("id") == args["rule_id"] for r in rules.get("transactionRules") or [])
     return {"rule_id": args["rule_id"], "deleted": not still_there,
             "api_deleted_flag": payload.get("deleted")}
+
+
+@tool("update_transaction_rule",
+      f"Replace a rule's conditions and actions (anything not given is cleared). {RULE_HELP}",
+      {"rule_id": string("Rule ID (see list_transaction_rules)"), **RULE_FIELDS},
+      ["rule_id"], DESTRUCTIVE)
+async def update_transaction_rule(mm: MonarchMoney, args: Args) -> Any:
+    rule_input = {"id": args["rule_id"], **q.build_rule_input(args)}
+    resp = await q.execute(mm, q.UPDATE_RULE, {"input": rule_input})
+    q.raise_payload_errors((resp.get("updateTransactionRuleV2") or {}).get("errors"), "Rule update")
+    return {"updated": args["rule_id"], "input": rule_input}
+
+
+@tool("set_transaction_rule_order",
+      "Move a rule to a new priority position (0 = first). Returns the new order of all rules.",
+      {"rule_id": string("Rule ID"),
+       "order": {"type": "integer", "minimum": 0, "description": "New position, 0-based"}},
+      ["rule_id", "order"], WRITE)
+async def set_transaction_rule_order(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.UPDATE_RULE_ORDER, {"id": args["rule_id"], "order": args["order"]})
+    return (resp.get("updateTransactionRuleOrderV2") or {}).get("transactionRules")
+
+
+@tool("preview_transaction_rule",
+      f"Show which existing transactions a rule would change, without saving it. {RULE_HELP} "
+      "Returns the total count and up to 30 matches per call.",
+      {**{k: v for k, v in RULE_FIELDS.items() if k != "apply_to_existing"},
+       "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "Matches to skip"}})
+async def preview_transaction_rule(mm: MonarchMoney, args: Args) -> Any:
+    rule_input = q.build_rule_input(args)
+    resp = await q.execute(mm, q.PREVIEW_RULE, {"rule": rule_input, "offset": args.get("offset", 0)})
+    return resp.get("transactionRulePreview")
 
 
 # --- Goals ------------------------------------------------------------------
@@ -898,6 +1177,20 @@ async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
 
 
 # --- Other ------------------------------------------------------------------
+
+@tool("get_household_members", "List household members (IDs for owner_user_id)")
+async def get_household_members(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_HOUSEHOLD_MEMBERS)).get("myHousehold")
+
+
+@tool("search_entities",
+      "Find accounts, categories, merchants, tags, and other items by name, like the "
+      "web app's command palette",
+      {"query": string("What to search for")}, ["query"])
+async def search_entities(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.SEMANTIC_SEARCH, {"query": args["query"]})
+    return (resp.get("semanticSearch") or {}).get("results")
+
 
 @tool("get_credit_history", "Get credit score history")
 async def get_credit_history(mm: MonarchMoney, args: Args) -> Any:

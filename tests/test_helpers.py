@@ -38,6 +38,17 @@ def test_first_of_month() -> None:
     assert server.first_of_month({}, "m") is None
 
 
+@pytest.mark.parametrize("day, bounds", [
+    (date(2026, 2, 14), ("2026-02-01", "2026-02-28")),
+    (date(2028, 2, 29), ("2028-02-01", "2028-02-29")),
+    (date(2026, 12, 31), ("2026-12-01", "2026-12-31")),
+    (date(2026, 9, 1), ("2026-09-01", "2026-09-30")),
+    (date(2026, 1, 31), ("2026-01-01", "2026-01-31")),
+])
+def test_month_bounds(day: date, bounds: tuple[str, str]) -> None:
+    assert server.month_bounds(day) == bounds
+
+
 def test_pick_renames_and_skips_missing() -> None:
     assert server.pick({"a": 1, "c": None}, {"a": "A", "b": "B", "c": "C"}) == {"A": 1, "C": None}
 

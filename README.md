@@ -72,14 +72,15 @@ Read-only tools are marked as such to MCP clients; tools that delete or overwrit
 | Area | Tools |
 |---|---|
 | Accounts | `get_accounts`, `get_account_type_options`, `get_institutions`, `get_account_holdings`, `get_account_history`, `get_recent_account_balances`, `get_net_worth_history`, `get_account_snapshots_by_type`, `create_manual_account`, `update_account`, `delete_account`, `upload_account_balance_history`, `refresh_accounts`, `get_refresh_status` |
-| Transactions | `get_transactions`, `get_transaction_details`, `get_transactions_summary`, `create_transaction`, `update_transaction`, `delete_transaction`, `get_transaction_splits`, `update_transaction_splits`, `upload_transaction_attachment` |
-| Tags | `get_transaction_tags`, `create_transaction_tag`, `set_transaction_tags` |
-| Categories | `get_transaction_categories`, `get_transaction_category_groups`, `create_transaction_category`, `delete_transaction_categories` |
-| Budgets and cash flow | `get_budgets`, `set_budget_amounts`, `get_cashflow`, `get_cashflow_summary`, `get_recurring_transactions` |
-| Rules | `list_transaction_rules`, `create_transaction_rule`, `delete_transaction_rule` |
+| Transactions | `get_transactions`, `get_transaction_details`, `get_transactions_summary`, `create_transaction`, `update_transaction`, `delete_transaction`, `bulk_update_transactions`, `bulk_delete_transactions`, `move_transactions`, `get_transaction_splits`, `update_transaction_splits`, `upload_transaction_attachment` |
+| Tags | `get_transaction_tags`, `create_transaction_tag`, `update_transaction_tag`, `delete_transaction_tag`, `set_transaction_tags` |
+| Categories | `get_transaction_categories`, `get_transaction_category_groups`, `create_transaction_category`, `update_transaction_category`, `delete_transaction_categories`, `create_category_group`, `update_category_group`, `delete_category_group` |
+| Budgets and cash flow | `get_budgets`, `set_budget_amounts`, `get_cashflow`, `get_cashflow_summary` |
+| Recurring | `get_recurring_transactions`, `get_recurring_streams`, `get_recurring_remaining_due`, `mark_stream_not_recurring` |
+| Rules | `list_transaction_rules`, `preview_transaction_rule`, `create_transaction_rule`, `update_transaction_rule`, `set_transaction_rule_order`, `delete_transaction_rule` |
 | Goals | `get_goals`, `create_goal`, `update_goal`, `archive_goal`, `unarchive_goal`, `delete_goal`, `contribute_to_goal`, `withdraw_from_goal`, `set_goal_budget_amount` |
 | Merchants | `get_merchants`, `get_merchant`, `update_merchant`, `delete_merchant` (merges into `move_to_merchant_id`; Monarch rarely allows a plain delete) |
-| Other | `get_credit_history`, `get_subscription_details` |
+| Other | `get_household_members`, `search_entities`, `get_credit_history`, `get_subscription_details` |
 
 Each tool's parameters are described in its input schema, which your MCP client shows.
 
@@ -87,7 +88,7 @@ Dates are `YYYY-MM-DD`. Where a tool takes `start_date` and `end_date`, give bot
 
 ### Unofficial operations
 
-Most tools go through the [monarchmoneycommunity](https://github.com/bradleyseanf/monarchmoneycommunity) library. Rules, goals, and merchants aren't covered by it, so `monarch_gql.py` calls the same GraphQL operations Monarch's web app uses. Monarch can change these without notice.
+Some tools go through the [monarchmoneycommunity](https://github.com/bradleyseanf/monarchmoneycommunity) library. The rest (rules, goals, merchants, bulk edits, category groups, and more) call the same GraphQL operations Monarch's web app uses, from `monarch_gql.py`. Monarch can change these without notice.
 
 Goals use Monarch's current savings goals system. Households still on the legacy goals system aren't supported.
 
@@ -125,7 +126,9 @@ uv sync
 ./check.sh -k goals # extra arguments go to pytest
 ```
 
-The tests mock the Monarch client, so they never touch a real account. Every tool gets called through the MCP dispatcher, and a full test run fails if any registered tool has no test. CI runs `./check.sh` on every push and pull request.
+The tests mock the Monarch client, so they never touch a real account. Every tool gets called through the MCP dispatcher, and a full test run fails if any registered tool has no test.
+
+Monarch's web app ships a copy of its GraphQL schema. `scripts/fetch_schema.py` extracts it to `.schema/`, and the tests validate every operation the server sends against it, which catches wrong field names and argument types without calling the API. `check.sh` fetches the schema if it's missing. CI runs `./check.sh` on every push and pull request.
 
 ## Credits
 

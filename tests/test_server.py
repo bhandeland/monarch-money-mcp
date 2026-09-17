@@ -17,7 +17,7 @@ from tests.helpers import Call, ToolError
 async def test_list_tools_matches_registry() -> None:
     tools = await server.list_tools()
     assert [t.name for t in tools] == list(server.TOOLS)
-    assert len(tools) == 53
+    assert len(tools) == 70
 
 
 @pytest.mark.parametrize("name", sorted(server.TOOLS))
@@ -35,7 +35,7 @@ def test_tool_schema_is_well_formed(name: str) -> None:
 def test_tool_annotations_match_name(name: str) -> None:
     annotations = server.TOOLS[name][0].annotations
     assert annotations is not None
-    reads = name.startswith(("get_", "list_"))
+    reads = name.startswith(("get_", "list_", "preview_", "search_"))
     assert annotations.readOnlyHint is reads
     if name.startswith("delete_"):
         assert annotations.destructiveHint is True

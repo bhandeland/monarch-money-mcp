@@ -360,3 +360,291 @@ DELETE_MERCHANT = gql("""
         }
     }
 """)
+
+
+# ---------------------------------------------------------------------------
+# Household
+# ---------------------------------------------------------------------------
+GET_HOUSEHOLD_MEMBERS = gql("""
+    query Common_GetHouseholdMembers {
+        myHousehold {
+            id
+            name
+            users { id displayName email }
+        }
+    }
+""")
+
+SEMANTIC_SEARCH = gql("""
+    query Web_GetCommandPaletteEntities($query: String!) {
+        semanticSearch(query: $query) {
+            results { id type name }
+        }
+    }
+""")
+
+
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
+REVIEW_STATUSES = ["needs_review", "reviewed"]
+
+UPDATE_TRANSACTION = gql("""
+    mutation Web_TransactionDrawerUpdateTransaction($input: UpdateTransactionMutationInput!) {
+        updateTransaction(input: $input) {
+            transaction {
+                id
+                date
+                amount
+                notes
+                hideFromReports
+                needsReview
+                reviewStatus
+                isRecurring
+                merchant { id name }
+                category { id name }
+                goal { id name }
+                ownedByUser { id displayName }
+                businessEntity { id name }
+            }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+BULK_UPDATE_TRANSACTIONS = gql("""
+    mutation Common_BulkUpdateTransactionsMutation(
+        $selectedTransactionIds: [ID!]
+        $excludedTransactionIds: [ID!]
+        $allSelected: Boolean!
+        $expectedAffectedTransactionCount: Int!
+        $updates: TransactionUpdateParams!
+        $filters: TransactionFilterInput
+    ) {
+        bulkUpdateTransactions(
+            selectedTransactionIds: $selectedTransactionIds
+            excludedTransactionIds: $excludedTransactionIds
+            updates: $updates
+            allSelected: $allSelected
+            expectedAffectedTransactionCount: $expectedAffectedTransactionCount
+            filters: $filters
+        ) {
+            success
+            affectedCount
+            errors { message }
+        }
+    }
+""")
+
+BULK_DELETE_TRANSACTIONS = gql("""
+    mutation Common_BulkDeleteTransactionsMutation(
+        $selectedTransactionIds: [ID!]
+        $excludedTransactionIds: [ID!]
+        $allSelected: Boolean!
+        $expectedAffectedTransactionCount: Int!
+        $filters: TransactionFilterInput
+    ) {
+        bulkDeleteTransactions(
+            input: {
+                selectedTransactionIds: $selectedTransactionIds
+                excludedTransactionIds: $excludedTransactionIds
+                isAllSelected: $allSelected
+                expectedAffectedTransactionCount: $expectedAffectedTransactionCount
+                filters: $filters
+            }
+        ) {
+            success
+            affectedCount
+            errors { message }
+        }
+    }
+""")
+
+MOVE_TRANSACTIONS = gql("""
+    mutation Web_MoveTransactions($input: MoveTransactionsInput!) {
+        moveTransactions(input: $input) {
+            numTransactionsMoved
+            errors { message }
+        }
+    }
+""")
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+UPDATE_TRANSACTION_TAG = gql("""
+    mutation Common_UpdateTransactionTag($input: UpdateTransactionTagInput!) {
+        updateTransactionTag(input: $input) {
+            tag { id name color order }
+            errors { message }
+        }
+    }
+""")
+
+DELETE_TRANSACTION_TAG = gql("""
+    mutation Common_DeleteHouseholdTransactionTag($tagId: ID!) {
+        deleteTransactionTag(tagId: $tagId) {
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+
+# ---------------------------------------------------------------------------
+# Categories and category groups
+# ---------------------------------------------------------------------------
+CATEGORY_TYPES = ["expense", "income", "transfer"]
+BUDGET_VARIABILITIES = ["fixed", "flexible", "non_monthly"]
+
+UPDATE_CATEGORY = gql("""
+    mutation Web_UpdateCategory($input: UpdateCategoryInput!) {
+        updateCategory(input: $input) {
+            errors { ...PayloadErrorFields }
+            category {
+                id
+                name
+                icon
+                excludeFromBudget
+                budgetVariability
+                rolloverPeriod { id startMonth }
+                group { id name type }
+            }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+DELETE_CATEGORY = gql("""
+    mutation Web_DeleteCategory($id: UUID!, $moveToCategoryId: UUID) {
+        deleteCategory(id: $id, moveToCategoryId: $moveToCategoryId) {
+            deleted
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+CATEGORY_GROUP_FIELDS = """
+    fragment CategoryGroupFields on CategoryGroup {
+        id
+        name
+        order
+        type
+        color
+        groupLevelBudgetingEnabled
+        budgetVariability
+    }
+"""
+
+CREATE_CATEGORY_GROUP = gql("""
+    mutation Common_CreateCategoryGroup($input: CreateCategoryGroupInput!) {
+        createCategoryGroup(input: $input) {
+            categoryGroup { ...CategoryGroupFields }
+        }
+    }
+""" + CATEGORY_GROUP_FIELDS)
+
+UPDATE_CATEGORY_GROUP = gql("""
+    mutation Common_UpdateCategoryGroup($input: UpdateCategoryGroupInput!) {
+        updateCategoryGroup(input: $input) {
+            categoryGroup { ...CategoryGroupFields }
+        }
+    }
+""" + CATEGORY_GROUP_FIELDS)
+
+DELETE_CATEGORY_GROUP = gql("""
+    mutation Common_DeleteCategoryGroup($id: UUID!, $moveToGroupId: UUID) {
+        deleteCategoryGroup(id: $id, moveToGroupId: $moveToGroupId) {
+            deleted
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+
+# ---------------------------------------------------------------------------
+# Rule updates and previews
+# ---------------------------------------------------------------------------
+UPDATE_RULE = gql("""
+    mutation Common_UpdateTransactionRuleMutationV2($input: UpdateTransactionRuleInput!) {
+        updateTransactionRuleV2(input: $input) {
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+UPDATE_RULE_ORDER = gql("""
+    mutation Web_UpdateRuleOrderMutation($id: ID!, $order: Int!) {
+        updateTransactionRuleOrderV2(id: $id, order: $order) {
+            transactionRules { id order }
+        }
+    }
+""")
+
+PREVIEW_RULE = gql("""
+    query Common_PreviewTransactionRule($rule: TransactionRulePreviewInput!, $offset: Int) {
+        transactionRulePreview(input: $rule) {
+            totalCount
+            results(offset: $offset, limit: 30) {
+                newName
+                newCategory { id name }
+                newTags { id name }
+                newHideFromReports
+                transaction {
+                    id
+                    date
+                    amount
+                    merchant { id name }
+                    category { id name }
+                }
+            }
+        }
+    }
+""")
+
+
+# ---------------------------------------------------------------------------
+# Recurring
+# ---------------------------------------------------------------------------
+GET_RECURRING_STREAMS = gql("""
+    query Common_GetRecurringStreams($includeLiabilities: Boolean) {
+        recurringTransactionStreams(includePending: true, includeLiabilities: $includeLiabilities) {
+            stream {
+                id
+                reviewStatus
+                frequency
+                amount
+                baseDate
+                dayOfTheMonth
+                isApproximate
+                name
+                recurringType
+                merchant { id }
+            }
+        }
+    }
+""")
+
+MARK_STREAM_NOT_RECURRING = gql("""
+    mutation Common_MarkAsNotRecurring($streamId: ID!) {
+        markStreamAsNotRecurring(streamId: $streamId) {
+            success
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+GET_RECURRING_REMAINING_DUE = gql("""
+    query Web_GetDashboardUpcomingRecurringTransactionItems(
+        $startDate: Date!
+        $endDate: Date!
+        $includeLiabilities: Boolean
+    ) {
+        recurringRemainingDue(
+            startDate: $startDate
+            endDate: $endDate
+            includeLiabilities: $includeLiabilities
+        ) {
+            amount
+        }
+    }
+""")

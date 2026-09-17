@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.helpers import Call, ToolError
+import server
+from tests.helpers import Call, ToolError, gql_ops
 
 
 async def test_get_budgets(call: Call, mm: AsyncMock) -> None:
@@ -68,3 +69,41 @@ async def test_date_range_reads(call: Call, mm: AsyncMock, tool: str, method: st
     ]
     with pytest.raises(ToolError, match="both"):
         await call(tool, end_date="2026-01-31")
+
+
+# --- Recurring --------------------------------------------------------------------
+
+async def test_get_recurring_streams(call: Call, mm: AsyncMock) -> None:
+    mm.gql_call.return_value = {"recurringTransactionStreams": [
+        {"stream": {"id": "s1", "name": "Netflix"}}, {"stream": {"id": "s2", "name": "Rent"}}]}
+    assert await call("get_recurring_streams") == [{"id": "s1", "name": "Netflix"}, {"id": "s2", "name": "Rent"}]
+    await call("get_recurring_streams", include_liabilities=False)
+    assert gql_ops(mm) == [("Common_GetRecurringStreams", {"includeLiabilities": True}),
+                           ("Common_GetRecurringStreams", {"includeLiabilities": False})]
+
+
+async def test_get_recurring_remaining_due_range(call: Call, mm: AsyncMock) -> None:
+    mm.gql_call.return_value = {"recurringRemainingDue": {"amount": -812.5}}
+    assert await call("get_recurring_remaining_due", start_date="2026-02-01", end_date="2026-02-28",
+                      include_liabilities=False) == {
+        "start_date": "2026-02-01", "end_date": "2026-02-28", "amount": -812.5}
+    assert gql_ops(mm) == [("Web_GetDashboardUpcomingRecurringTransactionItems", {
+        "startDate": "2026-02-01", "endDate": "2026-02-28", "includeLiabilities": False})]
+
+
+async def test_get_recurring_remaining_due_defaults_to_current_month(call: Call, mm: AsyncMock) -> None:
+    mm.gql_call.return_value = {"recurringRemainingDue": {"amount": 0}}
+    out = await call("get_recurring_remaining_due")
+    assert (out["start_date"], out["end_date"]) == server.month_bounds(date.today())
+
+
+async def test_mark_stream_not_recurring(call: Call, mm: AsyncMock) -> None:
+    mm.gql_call.return_value = {"markStreamAsNotRecurring": {"success": True, "errors": None}}
+    assert await call("mark_stream_not_recurring", stream_id="s1") == {"stream_id": "s1", "success": True}
+    assert gql_ops(mm) == [("Common_MarkAsNotRecurring", {"streamId": "s1"})]
+
+
+async def test_mark_stream_not_recurring_surfaces_errors(call: Call, mm: AsyncMock) -> None:
+    mm.gql_call.return_value = {"markStreamAsNotRecurring": {"errors": {"message": "unknown stream"}}}
+    with pytest.raises(ToolError, match="Marking not recurring failed: unknown stream"):
+        await call("mark_stream_not_recurring", stream_id="s1")
