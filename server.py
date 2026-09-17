@@ -10,7 +10,7 @@ import json
 from collections.abc import Awaitable, Callable
 from datetime import datetime, date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from gql import GraphQLRequest
 from mcp.server import Server
@@ -198,9 +198,11 @@ async def get_recent_account_balances(mm: MonarchMoney, args: Args) -> Any:
                               "(see get_account_type_options)")})
 async def get_net_worth_history(mm: MonarchMoney, args: Args) -> Any:
     start, end = date_range(args)
+    # Annotated as dates, but the library sends them as GraphQL variables, which
+    # need strings (its own default start_date is an ISO string).
     return await mm.get_aggregate_snapshots(
-        start_date=date.fromisoformat(start) if start else None,
-        end_date=date.fromisoformat(end) if end else None,
+        start_date=cast(Any, start),
+        end_date=cast(Any, end),
         account_type=args.get("account_type"),
     )
 

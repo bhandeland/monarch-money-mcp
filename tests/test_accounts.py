@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -53,7 +53,7 @@ async def test_get_net_worth_history_passes_dates(call: Call, mm: AsyncMock) -> 
     await call("get_net_worth_history", start_date="2026-01-01", end_date="2026-02-01",
                account_type="brokerage")
     mm.get_aggregate_snapshots.assert_awaited_once_with(
-        start_date=date(2026, 1, 1), end_date=date(2026, 2, 1), account_type="brokerage")
+        start_date="2026-01-01", end_date="2026-02-01", account_type="brokerage")
 
 
 async def test_get_net_worth_history_defaults(call: Call, mm: AsyncMock) -> None:
