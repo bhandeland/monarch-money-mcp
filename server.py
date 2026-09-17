@@ -1864,7 +1864,7 @@ async def get_business_entity_financials(mm: MonarchMoney, args: Args) -> Any:
         entities: list[Args] = (await q.execute(mm, q.GET_BUSINESS_ENTITIES_SUMMARY)).get("businessEntities") or []
         ids = [e["id"] for e in entities]
     if not ids:
-        return []
+        return ids
     resp = await q.execute(mm, q.GET_BUSINESS_ENTITY_FINANCIALS,
                            {"entityIds": ids, "startDate": start, "endDate": end})
     return resp.get("businessEntityFinancials")

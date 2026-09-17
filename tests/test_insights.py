@@ -162,7 +162,10 @@ async def test_get_weekly_recap_dates(call: Call, mm: AsyncMock, no_poll_wait: N
 async def test_get_weekly_recap_defaults_to_last_week(call: Call, mm: AsyncMock,
                                                       monkeypatch: pytest.MonkeyPatch,
                                                       no_poll_wait: None) -> None:
-    monkeypatch.setattr(server, "last_recap_week", lambda today: ("2026-09-06", "2026-09-12"))
+    def fixed_week(today: date) -> tuple[str, str]:
+        return ("2026-09-06", "2026-09-12")
+
+    monkeypatch.setattr(server, "last_recap_week", fixed_week)
     mm.gql_call.return_value = {"recap": {"id": "r1"}}
     await call("get_weekly_recap")
     assert gql_ops(mm)[0][1] == {"startDate": "2026-09-06", "endDate": "2026-09-12"}
