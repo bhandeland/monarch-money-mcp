@@ -25,4 +25,7 @@ venv/
 
 # OS
 .DS_Store
-Thumbs.db.schema/
+Thumbs.db
+
+# Monarch schema fetched by scripts/fetch_schema.py
+.schema/
