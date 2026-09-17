@@ -63,7 +63,8 @@ async def test_get_business_entity_financials_without_businesses(call: Call, mm:
 async def test_business_date_range_is_required(call: Call, mm: AsyncMock,
                                                arguments: dict[str, str]) -> None:
     for tool in ("get_business_entity_financials", "get_business_entity_summaries"):
-        with pytest.raises(ToolError, match="start_date and end_date"):
+        with pytest.raises(ToolError, match=f"^Invalid arguments for {tool}: .*'(start|end)_date' "
+                                            "is a required property"):
             await call(tool, business_entity_ids=["b1"], **arguments)
     mm.gql_call.assert_not_awaited()
 

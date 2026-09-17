@@ -85,7 +85,8 @@ async def test_insight_mutation_surfaces_errors(call: Call, mm: AsyncMock) -> No
 
 
 async def test_update_insight_status_requires_status(call: Call, mm: AsyncMock) -> None:
-    with pytest.raises(ToolError, match="^Error executing update_insight_status: 'status'$"):
+    with pytest.raises(ToolError, match="^Invalid arguments for update_insight_status: "
+                                        "'status' is a required property$"):
         await call("update_insight_status", insight_id="i1")
     mm.gql_call.assert_not_awaited()
 

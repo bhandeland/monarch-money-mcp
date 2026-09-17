@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from gql.transport.exceptions import TransportServerError
+from jsonschema import Draft202012Validator
 from mcp import Client
 from mcp.types import TextContent
 from monarchmoney import MonarchMoney
@@ -73,6 +74,34 @@ async def test_call_tool_accepts_none_arguments(mm: AsyncMock) -> None:
     [content] = result.content
     assert isinstance(content, TextContent) and not result.is_error
     assert content.text == "[]"
+
+
+@pytest.mark.parametrize("name", sorted(server.TOOLS))
+def test_tool_schema_is_valid_json_schema(name: str) -> None:
+    Draft202012Validator.check_schema(server.TOOLS[name][0].input_schema)
+
+
+async def test_missing_required_argument(call: Call, mm: AsyncMock) -> None:
+    with pytest.raises(ToolError, match="^Invalid arguments for get_account_history: "
+                                        "'account_id' is a required property$"):
+        await call("get_account_history")
+    mm.get_account_history.assert_not_awaited()
+
+
+async def test_unknown_argument(call: Call, mm: AsyncMock) -> None:
+    with pytest.raises(ToolError, match="^Invalid arguments for get_accounts: Additional "
+                                        r"properties are not allowed \('bogus' was unexpected\)$"):
+        await call("get_accounts", bogus=1)
+
+
+async def test_wrong_type_and_enum_report_the_argument(call: Call, mm: AsyncMock) -> None:
+    with pytest.raises(ToolError) as e:
+        await call("update_insight_status", insight_id=5, status="nope")
+    message = str(e.value)
+    assert message.startswith("Invalid arguments for update_insight_status: ")
+    assert "insight_id: 5 is not of type 'string'" in message
+    assert "status: 'nope' is not one of" in message
+    mm.gql_call.assert_not_awaited()
 
 
 # --- token renewal ----------------------------------------------------------------

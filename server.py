@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from gql import GraphQLRequest
+from jsonschema import Draft202012Validator
 from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 from mcp.types import (CallToolRequestParams, CallToolResult, ListToolsResult,
@@ -113,6 +114,7 @@ authenticator = auth.Authenticator(auth.configured_env(os.environ))
 # ---------------------------------------------------------------------------
 Handler = Callable[[MonarchMoney, Args], Awaitable[Any]]
 TOOLS: dict[str, tuple[Tool, Handler]] = {}
+VALIDATORS: dict[str, Draft202012Validator] = {}
 
 READ = ToolAnnotations(read_only_hint=True)
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False)
@@ -133,6 +135,7 @@ def tool(name: str, description: str, properties: Args | None = None,
     def register(fn: Handler) -> Handler:
         TOOLS[name] = (Tool(name=name, description=description, input_schema=schema,
                             annotations=annotations), fn)
+        VALIDATORS[name] = Draft202012Validator(schema)
         return fn
     return register
 
@@ -2507,15 +2510,24 @@ async def call_tool(name: str, arguments: Args | None) -> CallToolResult:
     if name not in TOOLS:
         return error(f"Error: Unknown tool '{name}'")
 
+    arguments = arguments or {}
+    # MCP clients send arguments as JSON, but the SDK doesn't check them against the schema.
+    problems = [f"{'.'.join(map(str, e.absolute_path))}: {e.message}" if e.absolute_path
+                else e.message
+                for e in sorted(VALIDATORS[name].iter_errors(arguments),
+                                key=lambda e: list(map(str, e.absolute_path)))]
+    if problems:
+        return error(f"Invalid arguments for {name}: {'; '.join(problems)}")
+
     handler = TOOLS[name][1]
     try:
         try:
-            return result(await handler(mm_client, arguments or {}))
+            return result(await handler(mm_client, arguments))
         except Exception as e:
             if not auth.is_auth_error(e):
                 raise
             # The token stopped working; log in again and retry once.
-            return result(await handler(await renew_client(mm_client), arguments or {}))
+            return result(await handler(await renew_client(mm_client), arguments))
     except Exception as e:
         return error(f"Error executing {name}: {str(e)}")
 

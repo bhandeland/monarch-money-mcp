@@ -716,6 +716,7 @@ source = { editable = "." }
 dependencies = [
     { name = "gql" },
     { name = "graphql-core" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "monarchmoneycommunity" },
 ]
@@ -731,6 +732,7 @@ dev = [
 requires-dist = [
     { name = "gql", specifier = ">=4.0.0" },
     { name = "graphql-core", specifier = ">=3.2.12" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "mcp", specifier = ">=2.2.0" },
     { name = "monarchmoneycommunity", specifier = ">=1.5.2" },
 ]
