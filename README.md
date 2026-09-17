@@ -1,17 +1,19 @@
 # Monarch Money MCP Server
 
-Archived in favor of the now officially supported [Monarch Money Connector](https://help.monarch.com/hc/en-us/articles/50207234679956-Monarch-MCP-Connector)
+An MCP (Model Context Protocol) server for Monarch Money: accounts, transactions, budgets, goals, merchants, rules, and more.
 
-An MCP (Model Context Protocol) server that provides access to Monarch Money financial data and operations.
+Forked from [colvint/monarch-money-mcp](https://github.com/colvint/monarch-money-mcp), which was archived when Monarch launched its official connector. This fork is maintained and covers the rest of the API.
 
 ## Features
 
-- **Account Management**: List and retrieve account information
-- **Transaction Operations**: Get transactions with filtering by date range, accounts, and categories
-- **Budget Analysis**: Access budget data and spending insights
-- **Category Management**: List and manage transaction categories
-- **Goal Tracking**: Access financial goals and progress
-- **Net Worth Tracking**: Retrieve net worth snapshots over time
+- **Accounts**: balances, balance history, net worth over time, investment holdings, manual accounts, refreshes
+- **Transactions**: search and filter, create, update, delete, splits, tags, attachments
+- **Categories and budgets**: manage categories, set budget amounts, cash flow and summaries
+- **Recurring**: upcoming bills, subscriptions, and income
+- **Goals**: create and manage savings goals, contributions, and withdrawals
+- **Merchants**: list, rename, set default categories, merge
+- **Rules**: list, create, and delete transaction rules
+- **Credit score** history
 
 ## Installation
 
@@ -62,34 +64,29 @@ Add the server to your `.mcp.json` configuration file:
 
 ## Available Tools
 
-### `get_accounts`
-List all accounts with their balances and details.
+Read-only tools are marked as such to MCP clients; tools that delete or overwrite data are marked destructive.
 
-### `get_transactions`
-Get transactions with optional filtering:
-- `start_date`: Filter transactions from this date (YYYY-MM-DD)
-- `end_date`: Filter transactions to this date (YYYY-MM-DD)
-- `account_ids`: List of account IDs to filter by
-- `category_ids`: List of category IDs to filter by
-- `limit`: Maximum number of transactions to return
+| Area | Tools |
+|---|---|
+| Accounts | `get_accounts`, `get_account_type_options`, `get_institutions`, `get_account_holdings`, `get_account_history`, `get_recent_account_balances`, `get_net_worth_history`, `get_account_snapshots_by_type`, `create_manual_account`, `update_account`, `delete_account`, `upload_account_balance_history`, `refresh_accounts`, `get_refresh_status` |
+| Transactions | `get_transactions`, `get_transaction_details`, `get_transactions_summary`, `create_transaction`, `update_transaction`, `delete_transaction`, `get_transaction_splits`, `update_transaction_splits`, `upload_transaction_attachment` |
+| Tags | `get_transaction_tags`, `create_transaction_tag`, `set_transaction_tags` |
+| Categories | `get_transaction_categories`, `get_transaction_category_groups`, `create_transaction_category`, `delete_transaction_categories` |
+| Budgets and cash flow | `get_budgets`, `set_budget_amounts`, `get_cashflow`, `get_cashflow_summary`, `get_recurring_transactions` |
+| Rules | `list_transaction_rules`, `create_transaction_rule`, `delete_transaction_rule` |
+| Goals | `get_goals`, `create_goal`, `update_goal`, `archive_goal`, `unarchive_goal`, `delete_goal`, `contribute_to_goal`, `withdraw_from_goal`, `set_goal_budget_amount` |
+| Merchants | `get_merchants`, `get_merchant`, `update_merchant`, `delete_merchant` (pass `move_to_merchant_id` to merge) |
+| Other | `get_credit_history`, `get_subscription_details` |
 
-### `get_categories`
-List all transaction categories.
+Each tool's parameters are described in its input schema, which your MCP client shows.
 
-### `get_budgets`
-Get budget information and spending analysis.
+Dates are `YYYY-MM-DD`. Where a tool takes `start_date` and `end_date`, give both or neither.
 
-### `get_goals`
-List financial goals and their progress.
+### Unofficial operations
 
-### `get_cashflow`
-Get cashflow data for income and expense analysis.
+Most tools go through the [monarchmoneycommunity](https://github.com/bradleyseanf/monarchmoneycommunity) library. Rules, goals, and merchants aren't covered by it, so `monarch_gql.py` calls the same GraphQL operations Monarch's web app uses. Monarch can change these without notice.
 
-### `get_investments`
-Get investment account details and performance.
-
-### `get_net_worth`
-Get net worth snapshots over time.
+Goals use Monarch's current savings goals system. Households still on the legacy goals system aren't supported.
 
 ## Usage Examples
 
@@ -111,8 +108,7 @@ Show me my current budget status using the get_budgets tool.
 ## Session Management
 
 The server automatically manages authentication sessions:
-- Sessions are cached in a `.mm` directory for faster subsequent logins
-- The session cache is automatically created and managed
+- The session token is cached in `~/.monarchmoney_session` for faster subsequent logins
 - Use `MONARCH_FORCE_LOGIN=true` in the env section to force a fresh login if needed
 
 ## Troubleshooting
@@ -131,7 +127,7 @@ The server automatically manages authentication sessions:
   ```
 
 ### Session Problems
-- Delete the `.mm` directory to clear cached sessions
+- Run `./clear-sessions.sh` to clear cached sessions
 - Set `MONARCH_FORCE_LOGIN=true` in your `.mcp.json` env section temporarily
 
 ## Credits
@@ -139,12 +135,12 @@ The server automatically manages authentication sessions:
 ### MCP Server
 - **Author**: Taurus Colvin ([@colvint](https://github.com/colvint))
 - **Description**: MCP (Model Context Protocol) server wrapper for Monarch Money
+- **Fork maintained by**: [@bhandeland](https://github.com/bhandeland)
 
 ### MonarchMoney Python Library
-- **Author**: hammem ([@hammem](https://github.com/hammem))
-- **Repository**: [https://github.com/hammem/monarchmoney](https://github.com/hammem/monarchmoney)
+- **Original author**: hammem ([@hammem](https://github.com/hammem)) - [hammem/monarchmoney](https://github.com/hammem/monarchmoney)
+- **Community fork used here**: bradleyseanf ([@bradleyseanf](https://github.com/bradleyseanf)) - [bradleyseanf/monarchmoneycommunity](https://github.com/bradleyseanf/monarchmoneycommunity)
 - **License**: MIT License
-- **Description**: The underlying Python library that provides API access to Monarch Money
 
 This MCP server wraps the monarchmoney Python library to provide seamless integration with AI assistants through the Model Context Protocol.
 
@@ -152,5 +148,5 @@ This MCP server wraps the monarchmoney Python library to provide seamless integr
 
 - Keep your credentials secure in your `.mcp.json` file
 - The MFA secret provides full access to your account - treat it like a password
-- Session files in `.mm` directory contain authentication tokens - keep them secure
+- `~/.monarchmoney_session` contains an authentication token - keep it secure
 - Consider restricting access to your `.mcp.json` file since it contains sensitive credentials
