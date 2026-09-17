@@ -873,12 +873,21 @@ async def update_merchant(mm: MonarchMoney, args: Args) -> Any:
 
 
 @tool("delete_merchant",
-      "Delete a merchant. With move_to_merchant_id, its transactions, rules, and recurring "
-      "settings move to that merchant first (this is how merchants are merged).",
+      "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring "
+      "settings move there and the merchant is removed. Without move_to_merchant_id, Monarch "
+      "usually refuses (even for merchants with no transactions).",
       {"merchant_id": string("Merchant to delete"),
        "move_to_merchant_id": string("Merchant to merge into")},
       ["merchant_id"], DESTRUCTIVE)
 async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
+    if not args.get("move_to_merchant_id"):
+        # Monarch answers an undeletable merchant with an opaque server error
+        merchant = (await q.execute(mm, q.GET_MERCHANT, {"merchantId": args["merchant_id"]})).get("merchant")
+        if not merchant:
+            raise ValueError(f"No merchant {args['merchant_id']}")
+        if not merchant.get("canBeDeleted"):
+            raise ValueError("Monarch can't delete this merchant directly; "
+                             "pass move_to_merchant_id to merge it into another merchant")
     resp = await q.execute(mm, q.DELETE_MERCHANT, {
         "merchantId": args["merchant_id"],
         "moveToId": args.get("move_to_merchant_id"),

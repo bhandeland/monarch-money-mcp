@@ -53,10 +53,25 @@ async def test_update_merchant_surfaces_errors(call: Call, mm: AsyncMock) -> Non
 
 
 async def test_delete_merchant(call: Call, mm: AsyncMock) -> None:
-    mm.gql_call.return_value = {"deleteMerchant": {"success": True}}
+    mm.gql_call.side_effect = [{"merchant": {"id": "m1", "canBeDeleted": True}},
+                               {"deleteMerchant": {"success": True}}]
     assert await call("delete_merchant", merchant_id="m1") == {
         "merchant_id": "m1", "merged_into": None, "success": True}
-    assert gql_ops(mm) == [("Common_DeleteMerchant", {"merchantId": "m1", "moveToId": None})]
+    assert gql_ops(mm) == [("Common_GetEditMerchant", {"merchantId": "m1"}),
+                           ("Common_DeleteMerchant", {"merchantId": "m1", "moveToId": None})]
+
+
+async def test_delete_merchant_refuses_undeletable(call: Call, mm: AsyncMock) -> None:
+    mm.gql_call.return_value = {"merchant": {"id": "m1", "canBeDeleted": False}}
+    with pytest.raises(ToolError, match="can't delete this merchant.*move_to_merchant_id"):
+        await call("delete_merchant", merchant_id="m1")
+    assert [op for op, _ in gql_ops(mm)] == ["Common_GetEditMerchant"]
+
+
+async def test_delete_merchant_unknown(call: Call, mm: AsyncMock) -> None:
+    mm.gql_call.return_value = {"merchant": None}
+    with pytest.raises(ToolError, match="No merchant m1"):
+        await call("delete_merchant", merchant_id="m1")
 
 
 async def test_delete_merchant_merge(call: Call, mm: AsyncMock) -> None:
