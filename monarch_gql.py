@@ -1458,6 +1458,25 @@ GET_CASH_FLOW_PROJECTION = gql("""
             lowestBalance
             lowestBalanceDate
             safeToSpend
+# Budget moves and flex
+# ---------------------------------------------------------------------------
+GET_BUDGET_SETTINGS = gql("""
+    query Common_GetBudgetSettings {
+        budgetSystem
+        budgetApplyToFutureMonthsDefault
+        flexExpenseRolloverPeriod {
+            id
+            startMonth
+            endMonth
+            startingBalance
+            targetAmount
+            frequency
+            type
+        }
+        budgetStatus {
+            hasBudget
+            hasTransactions
+            willCreateBudgetFromEmptyDefaultCategories
         }
     }
 """)
@@ -1711,6 +1730,11 @@ DELETE_TAX_SCHEDULE_CATEGORY_MAPPING = gql("""
     mutation Web_DeleteTaxScheduleCategoryMapping($input: DeleteTaxScheduleCategoryMappingInput!) {
         deleteTaxScheduleCategoryMapping(input: $input) {
             deleted
+MOVE_BUDGET_MONEY = gql("""
+    mutation Web_MoveMoneyMutation($input: MoveMoneyMutationInput!) {
+        moveMoneyBetweenCategories(input: $input) {
+            fromBudgetItem { id budgetAmount }
+            toBudgetItem { id budgetAmount }
             errors { ...PayloadErrorFields }
         }
     }
@@ -1870,3 +1894,34 @@ DELETE_PAYCHECK_EMPLOYER = gql("""
         }
     }
 """)
+
+UPDATE_BUDGET_SETTINGS = gql("""
+    mutation Common_UpdateBudgetSettings($input: UpdateBudgetSettingsMutationInput!) {
+        updateBudgetSettings(input: $input) {
+            budgetSystem
+            budgetApplyToFutureMonthsDefault
+            budgetRolloverPeriod {
+                id
+                startMonth
+                startingBalance
+            }
+        }
+    }
+""")
+
+RESET_BUDGET_ROLLOVER = gql("""
+    mutation Web_ResetRolloverMutation($input: ResetBudgetRolloverInput!) {
+        resetBudgetRollover(input: $input) {
+            budgetRolloverPeriod {
+                id
+                startMonth
+                endMonth
+                startingBalance
+                targetAmount
+                frequency
+                type
+            }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
