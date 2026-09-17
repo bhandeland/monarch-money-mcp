@@ -356,6 +356,62 @@
       "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
     },
     {
+      "name": "get_portfolio",
+      "description": "Get investment performance (total value, returns, benchmarks) and holdings grouped by security across all investment accounts, or only the given ones."
+    },
+    {
+      "name": "search_securities",
+      "description": "Search stocks, funds, and other securities by ticker or name (IDs for create_manual_holding)."
+    },
+    {
+      "name": "get_security",
+      "description": "Get details and current price for one security."
+    },
+    {
+      "name": "get_security_performance",
+      "description": "Get daily return history for one or more securities."
+    },
+    {
+      "name": "get_security_types",
+      "description": "List security types (values for update_holding's security_type)."
+    },
+    {
+      "name": "get_allocation_categories",
+      "description": "List asset allocation categories (slugs for set_holding_classification and set_security_classification)."
+    },
+    {
+      "name": "create_manual_holding",
+      "description": "Add a holding to a manually tracked investment account."
+    },
+    {
+      "name": "update_holding",
+      "description": "Change a holding's quantity, cost basis, or security type."
+    },
+    {
+      "name": "delete_holding",
+      "description": "Delete a holding from a manually tracked investment account."
+    },
+    {
+      "name": "create_manual_investments_account",
+      "description": "Create a manually tracked investment account, tracked by holdings or by balance."
+    },
+    {
+      "name": "set_holding_classification",
+      "description": "Set the asset allocation category for one holding, overriding its security's category."
+    },
+    {
+      "name": "set_security_classification",
+      "description": "Set the asset allocation category for a security, for every holding of it."
+    },
+    {
+      "name": "clear_holding_classification",
+      "description": "Remove a holding's own allocation category, so it uses its security's again."
+    },
+    {
+      "name": "clear_security_classification",
+      "description": "Remove your allocation category for a security, going back to Monarch's default."
+    },
+    {
       "name": "get_household_members",
       "description": "List household members (IDs for owner_user_id)."
     },

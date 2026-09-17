@@ -648,3 +648,223 @@ GET_RECURRING_REMAINING_DUE = gql("""
         }
     }
 """)
+
+
+# --- Investments ---
+
+CLASSIFICATION_SLICES = """
+            slices {
+                id
+                allocationSlug
+                percentage
+                breakdownMode
+                referenceSecurityId
+                subSlices { id allocationSlug percentage breakdownMode referenceSecurityId }
+            }
+"""
+
+GET_PORTFOLIO = gql("""
+    query Web_GetPortfolio($portfolioInput: PortfolioInput) {
+        portfolio(input: $portfolioInput) {
+            performance {
+                totalValue
+                totalChangePercent
+                totalChangeDollars
+                oneDayChangePercent
+                historicalChart { date returnPercent }
+                benchmarks {
+                    security { id ticker name oneDayChangePercent }
+                    historicalChart { date returnPercent }
+                }
+            }
+            aggregateHoldings {
+                edges {
+                    node {
+                        id
+                        quantity
+                        costBasis
+                        totalValue
+                        securityPriceChangeDollars
+                        securityPriceChangePercent
+                        lastSyncedAt
+                        holdings {
+                            id
+                            type
+                            typeDisplay
+                            name
+                            ticker
+                            closingPrice
+                            closingPriceUpdatedAt
+                            isManual
+                            quantity
+                            value
+                            costBasis
+                            userCostBasis
+                            account { id displayName }
+                            taxLots { id acquisitionDate acquisitionQuantity costBasisPerUnit }
+                            securityClassification { id categorySlug }
+                            holdingClassification { id categorySlug }
+                        }
+                        security {
+                            id
+                            name
+                            ticker
+                            currentPrice
+                            currentPriceUpdatedAt
+                            closingPrice
+                            type
+                            typeDisplay
+                            assetClass
+                        }
+                    }
+                }
+            }
+        }
+    }
+""")
+
+SEARCH_SECURITIES = gql("""
+    query SecuritySearch($search: String!, $limit: Int, $orderByPopularity: Boolean) {
+        securities(search: $search, limit: $limit, orderByPopularity: $orderByPopularity) {
+            id
+            name
+            type
+            typeDisplay
+            ticker
+            currentPrice
+            closingPrice
+            oneDayChangeDollars
+            oneDayChangePercent
+        }
+    }
+""")
+
+GET_SECURITY = gql("""
+    query Common_GetSecurityDetails($id: ID!) {
+        security(id: $id) {
+            id
+            name
+            ticker
+            type
+            typeDisplay
+            assetClass
+            broadAssetClass
+            exchangeCode
+            currentPrice
+            currentPriceUpdatedAt
+            closingPrice
+            closingPriceUpdatedAt
+            oneDayChangeDollars
+            oneDayChangePercent
+            morningstarCategory
+            prospectusObjective
+        }
+    }
+""")
+
+GET_SECURITY_PERFORMANCE = gql("""
+    query Web_GetSecuritiesHistoricalPerformance($input: SecurityHistoricalPerformanceInput!) {
+        securityHistoricalPerformance(input: $input) {
+            security { id }
+            historicalChart { date returnPercent }
+        }
+    }
+""")
+
+GET_SECURITY_TYPES = gql("""
+    query Common_GetSecurityTypes {
+        securityTypes { type typeDisplay }
+    }
+""")
+
+GET_ALLOCATION_CATEGORIES = gql("""
+    query Web_GetAllocationCategoriesForClassification {
+        myHousehold {
+            id
+            allocationCategories {
+                id
+                slug
+                name
+                parent { id }
+            }
+        }
+    }
+""")
+
+CREATE_MANUAL_HOLDING = gql("""
+    mutation Common_CreateManualHolding($input: CreateManualHoldingInput!) {
+        createManualHolding(input: $input) {
+            holding { id ticker }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+UPDATE_HOLDING = gql("""
+    mutation Common_UpdateHolding($input: UpdateHoldingInput!) {
+        updateHolding(input: $input) {
+            holding { id }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+DELETE_HOLDING = gql("""
+    mutation Common_DeleteHolding($id: ID!) {
+        deleteHolding(id: $id) {
+            deleted
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+CREATE_MANUAL_INVESTMENTS_ACCOUNT = gql("""
+    mutation Common_CreateManualInvestmentsAccount($input: CreateManualInvestmentsAccountInput!) {
+        createManualInvestmentsAccount(input: $input) {
+            account { id }
+            errors { ...PayloadErrorFields }
+        }
+    }
+""" + PAYLOAD_ERRORS)
+
+SET_HOLDING_CLASSIFICATION = gql("""
+    mutation Web_SetHoldingClassification($input: SetHoldingClassificationInput!) {
+        setHoldingClassification(input: $input) {
+            holdingClassification {
+                id
+""" + CLASSIFICATION_SLICES + """
+            }
+            errors { message }
+        }
+    }
+""")
+
+SET_SECURITY_CLASSIFICATION = gql("""
+    mutation Web_SetSecurityClassification($input: SetSecurityClassificationInput!) {
+        setSecurityClassification(input: $input) {
+            securityClassification {
+                id
+""" + CLASSIFICATION_SLICES + """
+            }
+            errors { message }
+        }
+    }
+""")
+
+CLEAR_HOLDING_CLASSIFICATION = gql("""
+    mutation Web_ClearHoldingClassification($holdingId: ID!) {
+        clearHoldingClassification(holdingId: $holdingId) {
+            deleted
+            errors { message }
+        }
+    }
+""")
+
+CLEAR_SECURITY_CLASSIFICATION = gql("""
+    mutation Web_ClearSecurityClassification($securityId: ID!) {
+        clearSecurityClassification(securityId: $securityId) {
+            deleted
+            errors { message }
+        }
+    }
+""")

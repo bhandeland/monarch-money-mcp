@@ -1178,6 +1178,200 @@ async def delete_merchant(mm: MonarchMoney, args: Args) -> Any:
             "success": (resp.get("deleteMerchant") or {}).get("success")}
 
 
+# --- Investments ------------------------------------------------------------
+
+async def investment_mutation(mm: MonarchMoney, request: GraphQLRequest, variables: Args,
+                              field: str, action: str) -> Args:
+    """Run a mutation, raise its payload errors, and return the payload without them."""
+    resp = await q.execute(mm, request, variables)
+    payload: Args = resp.get(field) or {}
+    q.raise_payload_errors(payload.get("errors"), action)
+    return {k: v for k, v in payload.items() if k != "errors"}
+
+
+@tool("get_portfolio",
+      "Get investment performance (total value, returns, benchmarks) and holdings grouped "
+      "by security across all investment accounts, or only the given ones",
+      {"account_ids": id_list("Only include these accounts (default: all)"),
+       **DATE_RANGE,
+       "include_hidden_holdings": boolean("Include holdings hidden in the web app")})
+async def get_portfolio(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    portfolio: Args = {}
+    if args.get("account_ids"):
+        portfolio["accountIds"] = args["account_ids"]
+    if start:
+        portfolio["startDate"], portfolio["endDate"] = start, end
+    if args.get("include_hidden_holdings") is not None:
+        portfolio["includeHiddenHoldings"] = args["include_hidden_holdings"]
+    resp = await q.execute(mm, q.GET_PORTFOLIO, {"portfolioInput": portfolio})
+    return resp.get("portfolio")
+
+
+@tool("search_securities",
+      "Search stocks, funds, and other securities by ticker or name (IDs for "
+      "create_manual_holding)",
+      {"query": string("Ticker or name to search for"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100,
+                 "description": "Maximum results (default 20)"}},
+      ["query"])
+async def search_securities(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.SEARCH_SECURITIES, {
+        "search": args["query"], "limit": args.get("limit", 20), "orderByPopularity": True})
+    return resp.get("securities")
+
+
+@tool("get_security", "Get details and current price for one security",
+      {"security_id": string("Security ID (see search_securities or get_portfolio)")},
+      ["security_id"])
+async def get_security(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_SECURITY, {"id": args["security_id"]})).get("security")
+
+
+@tool("get_security_performance",
+      "Get daily return history for one or more securities",
+      {"security_ids": {**id_list("Security IDs"), "minItems": 1}, **DATE_RANGE},
+      ["security_ids"])
+async def get_security_performance(mm: MonarchMoney, args: Args) -> Any:
+    start, end = date_range(args)
+    performance: Args = {"securityIds": args["security_ids"]}
+    if start:
+        performance["startDate"], performance["endDate"] = start, end
+    resp = await q.execute(mm, q.GET_SECURITY_PERFORMANCE, {"input": performance})
+    return resp.get("securityHistoricalPerformance")
+
+
+@tool("get_security_types", "List security types (values for update_holding's security_type)")
+async def get_security_types(mm: MonarchMoney, args: Args) -> Any:
+    return (await q.execute(mm, q.GET_SECURITY_TYPES)).get("securityTypes")
+
+
+@tool("get_allocation_categories",
+      "List asset allocation categories (slugs for set_holding_classification and "
+      "set_security_classification)")
+async def get_allocation_categories(mm: MonarchMoney, args: Args) -> Any:
+    resp = await q.execute(mm, q.GET_ALLOCATION_CATEGORIES)
+    return (resp.get("myHousehold") or {}).get("allocationCategories")
+
+
+@tool("create_manual_holding", "Add a holding to a manually tracked investment account",
+      {"account_id": string("Investment account ID"),
+       "security_id": string("Security ID (see search_securities)"),
+       "quantity": number("Number of shares or units")},
+      ["account_id", "security_id", "quantity"], WRITE)
+async def create_manual_holding(mm: MonarchMoney, args: Args) -> Any:
+    holding = {"accountId": args["account_id"], "securityId": args["security_id"],
+               "quantity": args["quantity"]}
+    payload = await investment_mutation(mm, q.CREATE_MANUAL_HOLDING,
+                                        {"input": holding},
+                                        "createManualHolding", "Holding creation")
+    return payload.get("holding")
+
+
+@tool("update_holding", "Change a holding's quantity, cost basis, or security type",
+      {"holding_id": string("Holding ID (see get_portfolio)"),
+       "quantity": number("Number of shares or units"),
+       "cost_basis": number("Total cost basis"),
+       "security_type": string("Security type (see get_security_types)")},
+      ["holding_id"], WRITE)
+async def update_holding(mm: MonarchMoney, args: Args) -> Any:
+    fields = {"quantity": "quantity", "cost_basis": "userCostBasis",
+              "security_type": "securityType"}
+    changes = {api: args[arg] for arg, api in fields.items() if args.get(arg) is not None}
+    if not changes:
+        raise ValueError("Nothing to update: give quantity, cost_basis, or security_type.")
+    holding = {"id": args["holding_id"], **changes}
+    payload = await investment_mutation(mm, q.UPDATE_HOLDING,
+                                        {"input": holding},
+                                        "updateHolding", "Holding update")
+    return payload.get("holding")
+
+
+@tool("delete_holding", "Delete a holding from a manually tracked investment account",
+      {"holding_id": string("Holding ID (see get_portfolio)")}, ["holding_id"], DESTRUCTIVE)
+async def delete_holding(mm: MonarchMoney, args: Args) -> Any:
+    return await investment_mutation(mm, q.DELETE_HOLDING,
+                                     {"id": args["holding_id"]},
+                                     "deleteHolding", "Holding deletion")
+
+
+@tool("create_manual_investments_account",
+      "Create a manually tracked investment account, tracked by holdings or by balance",
+      {"name": string("Account name"),
+       "subtype": string("Investment account subtype, such as brokerage or st_401k "
+                         "(see get_account_type_options)"),
+       "tracking_method": string("Track individual holdings or just the balance",
+                                 enum=["holdings", "balances"]),
+       "initial_balance": number("Starting balance (for balance tracking)"),
+       "initial_holdings": {
+           "type": "array",
+           "description": "Starting holdings (for holdings tracking)",
+           "items": {"type": "object", "additionalProperties": False,
+                     "properties": {"security_id": string("Security ID"),
+                                    "quantity": number("Number of shares or units")},
+                     "required": ["security_id", "quantity"]}}},
+      ["name", "subtype", "tracking_method"], WRITE)
+async def create_manual_investments_account(mm: MonarchMoney, args: Args) -> Any:
+    if args["tracking_method"] not in ("holdings", "balances"):
+        raise ValueError("tracking_method must be holdings or balances.")
+    account: Args = {"name": args["name"], "subtype": args["subtype"],
+                     "manualInvestmentsTrackingMethod": args["tracking_method"]}
+    if args.get("initial_balance") is not None:
+        account["initialBalance"] = args["initial_balance"]
+    if args.get("initial_holdings"):
+        account["initialHoldings"] = [{"securityId": h["security_id"], "quantity": h["quantity"]}
+                                      for h in args["initial_holdings"]]
+    payload = await investment_mutation(mm, q.CREATE_MANUAL_INVESTMENTS_ACCOUNT,
+                                        {"input": account}, "createManualInvestmentsAccount",
+                                        "Investment account creation")
+    return payload.get("account")
+
+
+CATEGORY_SLUG = string("Allocation category slug (see get_allocation_categories)")
+
+
+@tool("set_holding_classification",
+      "Set the asset allocation category for one holding, overriding its security's category",
+      {"holding_id": string("Holding ID (see get_portfolio)"), "category_slug": CATEGORY_SLUG},
+      ["holding_id", "category_slug"], WRITE)
+async def set_holding_classification(mm: MonarchMoney, args: Args) -> Any:
+    classification = {"holdingId": args["holding_id"], "categorySlug": args["category_slug"]}
+    payload = await investment_mutation(mm, q.SET_HOLDING_CLASSIFICATION,
+                                        {"input": classification},
+                                        "setHoldingClassification", "Holding classification")
+    return payload.get("holdingClassification")
+
+
+@tool("set_security_classification",
+      "Set the asset allocation category for a security, for every holding of it",
+      {"security_id": string("Security ID"), "category_slug": CATEGORY_SLUG},
+      ["security_id", "category_slug"], WRITE)
+async def set_security_classification(mm: MonarchMoney, args: Args) -> Any:
+    classification = {"securityId": args["security_id"], "categorySlug": args["category_slug"]}
+    payload = await investment_mutation(mm, q.SET_SECURITY_CLASSIFICATION,
+                                        {"input": classification},
+                                        "setSecurityClassification", "Security classification")
+    return payload.get("securityClassification")
+
+
+@tool("clear_holding_classification",
+      "Remove a holding's own allocation category, so it uses its security's again",
+      {"holding_id": string("Holding ID")}, ["holding_id"], DESTRUCTIVE)
+async def clear_holding_classification(mm: MonarchMoney, args: Args) -> Any:
+    return await investment_mutation(mm, q.CLEAR_HOLDING_CLASSIFICATION,
+                                     {"holdingId": args["holding_id"]},
+                                     "clearHoldingClassification", "Holding classification reset")
+
+
+@tool("clear_security_classification",
+      "Remove your allocation category for a security, going back to Monarch's default",
+      {"security_id": string("Security ID")}, ["security_id"], DESTRUCTIVE)
+async def clear_security_classification(mm: MonarchMoney, args: Args) -> Any:
+    return await investment_mutation(mm, q.CLEAR_SECURITY_CLASSIFICATION,
+                                     {"securityId": args["security_id"]},
+                                     "clearSecurityClassification", "Security classification reset")
+
+
 # --- Other ------------------------------------------------------------------
 
 @tool("get_household_members", "List household members (IDs for owner_user_id)")
