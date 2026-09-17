@@ -102,7 +102,7 @@ server: Server[Any] = Server("monarch-money")
 
 # Set by serve() once authenticated; replaced when the token has to be renewed.
 mm_client: MonarchMoney | None = None
-authenticator = auth.Authenticator(os.environ)
+authenticator = auth.Authenticator(auth.configured_env(os.environ))
 
 
 # ---------------------------------------------------------------------------
@@ -1259,14 +1259,14 @@ async def serve() -> None:
 
 
 async def login() -> None:
-    path = await auth.interactive_login(os.environ, input, getpass.getpass)
+    path = await auth.interactive_login(auth.configured_env(os.environ), input, getpass.getpass)
     print(f"Saved session to {path}")
     for legacy in auth.remove_legacy_sessions():
         print(f"Removed old session file {legacy}")
 
 
 def logout() -> None:
-    path = auth.session_file(os.environ)
+    path = auth.session_file(auth.configured_env(os.environ))
     if auth.delete_token(path):
         print(f"Removed {path}")
     else:

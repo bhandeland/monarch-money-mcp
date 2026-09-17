@@ -1,0 +1,366 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "monarch-money-mcp",
+  "display_name": "Monarch Money",
+  "version": "0.1.0",
+  "description": "Accounts, transactions, budgets, goals, merchants, rules, and more from Monarch Money.",
+  "long_description": "An unofficial MCP server for Monarch Money. It reads and edits your accounts, transactions, categories, budgets, recurring bills, savings goals, merchants, and rules.\n\nSign-in: every setting is optional. If you leave them all blank, the extension uses the session token saved by running `monarch-money-mcp login` once in a terminal (see the README). If you fill in your email and password (and MFA secret, if your account uses 2FA), the extension logs in by itself and logs in again when the token expires. Those values are stored in your system keychain.",
+  "author": {
+    "name": "bhandeland",
+    "url": "https://github.com/bhandeland"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bhandeland/monarch-money-mcp"
+  },
+  "homepage": "https://github.com/bhandeland/monarch-money-mcp",
+  "support": "https://github.com/bhandeland/monarch-money-mcp/issues",
+  "keywords": [
+    "monarch",
+    "finance",
+    "budget",
+    "transactions"
+  ],
+  "server": {
+    "type": "uv",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--no-dev",
+        "--directory",
+        "${__dirname}",
+        "server.py"
+      ],
+      "env": {
+        "MONARCH_EMAIL": "${user_config.monarch_email}",
+        "MONARCH_PASSWORD": "${user_config.monarch_password}",
+        "MONARCH_MFA_SECRET": "${user_config.monarch_mfa_secret}",
+        "MONARCH_SESSION_FILE": "${user_config.session_file}"
+      }
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  },
+  "user_config": {
+    "monarch_email": {
+      "type": "string",
+      "title": "Monarch email",
+      "description": "Optional. With your password, lets the extension log in by itself. Leave blank to use the token saved by `monarch-money-mcp login`.",
+      "required": false
+    },
+    "monarch_password": {
+      "type": "string",
+      "title": "Monarch password",
+      "description": "Optional. Needed with your email for automatic login. Stored in your system keychain. Leave blank to use the saved login token.",
+      "required": false,
+      "sensitive": true
+    },
+    "monarch_mfa_secret": {
+      "type": "string",
+      "title": "MFA secret",
+      "description": "Optional. The 2FA setup key (from \"Can't scan?\" when turning on 2FA), not a 6-digit code. Only needed for automatic login on accounts with 2FA. Treat it like a password.",
+      "required": false,
+      "sensitive": true
+    },
+    "session_file": {
+      "type": "file",
+      "title": "Session file",
+      "description": "Optional. Where the login token is saved. Leave blank for the default, ~/.config/monarch-money-mcp/session.json, which is where `monarch-money-mcp login` saves it.",
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "get_accounts",
+      "description": "Retrieve all linked financial accounts."
+    },
+    {
+      "name": "get_account_type_options",
+      "description": "List valid account types and subtypes (needed for create_manual_account / update_account)."
+    },
+    {
+      "name": "get_institutions",
+      "description": "List connected financial institutions and their connection status."
+    },
+    {
+      "name": "get_account_holdings",
+      "description": "Get investment holdings for a brokerage or similar account."
+    },
+    {
+      "name": "get_account_history",
+      "description": "Get the full daily balance history for one account."
+    },
+    {
+      "name": "get_recent_account_balances",
+      "description": "Get daily balances for all accounts from start_date (default: last 31 days)."
+    },
+    {
+      "name": "get_net_worth_history",
+      "description": "Get the daily net worth (sum of all accounts), optionally limited to one account type."
+    },
+    {
+      "name": "get_account_snapshots_by_type",
+      "description": "Get net balances grouped by account type, by month or by year."
+    },
+    {
+      "name": "create_manual_account",
+      "description": "Create a manual (non-synced) account."
+    },
+    {
+      "name": "update_account",
+      "description": "Update an account's settings."
+    },
+    {
+      "name": "delete_account",
+      "description": "Permanently delete an account and its transactions."
+    },
+    {
+      "name": "upload_account_balance_history",
+      "description": "Upload daily balance history for a manual account."
+    },
+    {
+      "name": "refresh_accounts",
+      "description": "Request a refresh of account data from financial institutions."
+    },
+    {
+      "name": "get_refresh_status",
+      "description": "Check whether a previously requested account refresh has finished."
+    },
+    {
+      "name": "get_transactions",
+      "description": "Fetch transactions with optional filtering."
+    },
+    {
+      "name": "get_transaction_details",
+      "description": "Get full details for one transaction (original statement text, attachments, splits, goal, etc.)."
+    },
+    {
+      "name": "get_transactions_summary",
+      "description": "Get aggregate transaction stats (count, sums, averages, date range) for the whole household."
+    },
+    {
+      "name": "create_transaction",
+      "description": "Create a new transaction."
+    },
+    {
+      "name": "update_transaction",
+      "description": "Update an existing transaction."
+    },
+    {
+      "name": "delete_transaction",
+      "description": "Permanently delete a transaction."
+    },
+    {
+      "name": "bulk_update_transactions",
+      "description": "Apply the same change to many transactions at once."
+    },
+    {
+      "name": "bulk_delete_transactions",
+      "description": "Permanently delete many transactions at once."
+    },
+    {
+      "name": "move_transactions",
+      "description": "Move transactions from one account to another."
+    },
+    {
+      "name": "get_transaction_splits",
+      "description": "Get the split lines for a transaction."
+    },
+    {
+      "name": "update_transaction_splits",
+      "description": "Replace a transaction's splits."
+    },
+    {
+      "name": "upload_transaction_attachment",
+      "description": "Attach a local file (receipt, invoice, etc.) to a transaction."
+    },
+    {
+      "name": "get_transaction_tags",
+      "description": "List all transaction tags."
+    },
+    {
+      "name": "create_transaction_tag",
+      "description": "Create a transaction tag."
+    },
+    {
+      "name": "set_transaction_tags",
+      "description": "Set the tags on a transaction."
+    },
+    {
+      "name": "update_transaction_tag",
+      "description": "Rename a tag or change its color."
+    },
+    {
+      "name": "delete_transaction_tag",
+      "description": "Delete a tag."
+    },
+    {
+      "name": "get_transaction_categories",
+      "description": "List all transaction categories."
+    },
+    {
+      "name": "get_transaction_category_groups",
+      "description": "List category groups (needed for create_transaction_category)."
+    },
+    {
+      "name": "create_transaction_category",
+      "description": "Create a transaction category in a category group."
+    },
+    {
+      "name": "update_transaction_category",
+      "description": "Change a category's name, icon, group, or budget settings."
+    },
+    {
+      "name": "delete_transaction_categories",
+      "description": "Delete one or more categories."
+    },
+    {
+      "name": "create_category_group",
+      "description": "Create a category group."
+    },
+    {
+      "name": "update_category_group",
+      "description": "Change a category group's name, icon, color, or budget type."
+    },
+    {
+      "name": "delete_category_group",
+      "description": "Delete a category group."
+    },
+    {
+      "name": "get_budgets",
+      "description": "Retrieve budget information."
+    },
+    {
+      "name": "set_budget_amounts",
+      "description": "Set monthly budget amounts for one or more categories or category groups."
+    },
+    {
+      "name": "get_cashflow",
+      "description": "Cash flow broken down by category, category group, and merchant."
+    },
+    {
+      "name": "get_cashflow_summary",
+      "description": "Total income, expenses, savings, and savings rate for a period."
+    },
+    {
+      "name": "get_recurring_transactions",
+      "description": "List upcoming recurring transactions (bills, subscriptions, income) with merchant, amount, and account."
+    },
+    {
+      "name": "get_recurring_streams",
+      "description": "List every recurring series (subscriptions, bills, income) with frequency and amount."
+    },
+    {
+      "name": "get_recurring_remaining_due",
+      "description": "Total recurring amount still due in a period (default: the current month)."
+    },
+    {
+      "name": "mark_stream_not_recurring",
+      "description": "Stop treating a recurring series as recurring (see get_recurring_streams for IDs)."
+    },
+    {
+      "name": "list_transaction_rules",
+      "description": "List the household's transaction rules (conditions and actions) in priority order."
+    },
+    {
+      "name": "create_transaction_rule",
+      "description": "Create a transaction rule."
+    },
+    {
+      "name": "delete_transaction_rule",
+      "description": "Delete a transaction rule by id (use list_transaction_rules to find it)."
+    },
+    {
+      "name": "update_transaction_rule",
+      "description": "Replace a rule's conditions and actions (anything not given is cleared)."
+    },
+    {
+      "name": "set_transaction_rule_order",
+      "description": "Move a rule to a new priority position (0 = first)."
+    },
+    {
+      "name": "preview_transaction_rule",
+      "description": "Show which existing transactions a rule would change, without saving it."
+    },
+    {
+      "name": "get_goals",
+      "description": "List savings goals with balances, progress, and per-account allocations."
+    },
+    {
+      "name": "create_goal",
+      "description": "Create a savings goal."
+    },
+    {
+      "name": "update_goal",
+      "description": "Update a savings goal's settings."
+    },
+    {
+      "name": "archive_goal",
+      "description": "Archive a savings goal (can be restored with unarchive_goal)."
+    },
+    {
+      "name": "unarchive_goal",
+      "description": "Restore an archived savings goal."
+    },
+    {
+      "name": "delete_goal",
+      "description": "Permanently delete a savings goal and its contribution history."
+    },
+    {
+      "name": "contribute_to_goal",
+      "description": "Record a contribution from an account to a savings goal."
+    },
+    {
+      "name": "withdraw_from_goal",
+      "description": "Record a withdrawal from a savings goal back to an account."
+    },
+    {
+      "name": "set_goal_budget_amount",
+      "description": "Set the monthly budgeted contribution for a savings goal."
+    },
+    {
+      "name": "get_merchants",
+      "description": "List or search merchants with transaction counts and default categories."
+    },
+    {
+      "name": "get_merchant",
+      "description": "Get one merchant's details, including rule count and recurring settings."
+    },
+    {
+      "name": "update_merchant",
+      "description": "Rename a merchant, set its default category, or change its recurring settings."
+    },
+    {
+      "name": "delete_merchant",
+      "description": "Merge a merchant into move_to_merchant_id: its transactions, rules, and recurring settings move there and the merchant is removed."
+    },
+    {
+      "name": "get_household_members",
+      "description": "List household members (IDs for owner_user_id)."
+    },
+    {
+      "name": "search_entities",
+      "description": "Find accounts, categories, merchants, tags, and other items by name, like the web app's command palette."
+    },
+    {
+      "name": "get_credit_history",
+      "description": "Get credit score history."
+    },
+    {
+      "name": "get_subscription_details",
+      "description": "Get the Monarch Money subscription plan and status."
+    }
+  ]
+}

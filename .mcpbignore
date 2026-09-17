@@ -1,0 +1,18 @@
+# Only the server, pyproject.toml, uv.lock, README.md, and manifest.json go in the bundle.
+.venv/
+.git/
+.github/
+.claude/
+.schema/
+.mm/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.*
+*.mcpb
+tests/
+scripts/
+check.sh
+server/lib/
+server/venv/
